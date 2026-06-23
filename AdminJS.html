@@ -410,7 +410,7 @@
     $('view-fleet').innerHTML='<div class="'+animCls()+'"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px;">'
       +'<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13.5px;color:var(--muted);"><div><b style="color:var(--pine-soft);">'+avail+'</b> available</div><div><b style="color:#B07A2E;">'+out+'</b> out</div><div><b style="color:#9A8F7C;">'+maint+'</b> in maintenance</div></div>'
       +'<button class="btn" data-action="add-vehicle" style="border:1px solid var(--line-2);background:var(--card);color:var(--txt-2);font-weight:600;font-size:13.5px;padding:10px 16px;border-radius:12px;display:flex;align-items:center;gap:7px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add vehicle</button></div>'
-      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;">'+(cards||'<div class="empty">No scooters yet. Add your first vehicle.</div>')+'</div></div>';
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;">'+(cards||'<div class="empty" style="grid-column:1/-1;">No scooters yet. Add your first vehicle.</div>')+'</div></div>';
   }
 
   // ════════ MONEY (bank-like: drawers + passbook ledger) ════════
@@ -643,13 +643,13 @@
 
     // Guest-form group = everything riders touch (managers edit; operators just get the link).
     var gGuestForm=(isMgr()?gPricing+gCottages+gEmail:'')+gLink;
-    // Operators group (manager-only) = people + access + powers.
-    var gOperators=gOperatorsList+gAccess+gPowers;
+    // Operators group (manager-only): operators list full-width, then access + powers side by side.
+    var gOperators=gOperatorsList+'<div class="set-pair">'+gAccess+gPowers+'</div>';
 
     var groups={ guestform:gGuestForm, operators:gOperators };
     $('view-settings').innerHTML='<div class="'+animCls()+'">'
       +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">'+setChips+'</div>'
-      +'<div class="set-grid">'+(groups[A.setTab]||gGuestForm)+'</div>'
+      +'<div class="set-col">'+(groups[A.setTab]||gGuestForm)+'</div>'
       +'<div style="text-align:center;padding:8px 0 20px;"><button class="link-btn" data-action="logout" style="color:var(--terra);">Lock desk &amp; log out</button></div></div>';
 
     if(A.setTab==='guestform' && isMgr()){
