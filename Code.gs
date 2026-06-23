@@ -188,7 +188,7 @@ function doGet(e) {
       display: 'standalone',
       background_color: '#EFEAE0',
       theme_color: '#2F5D50',
-      icons: [{ src: 'https://raw.githubusercontent.com/google/material-design-icons/master/png/action/ev_station/materialicons/48dp/1x/baseline_ev_station_black_48dp.png', sizes: '48x48', type: 'image/png' }]
+      icons: [{ src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%232F5D50'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='Georgia,serif' font-size='21' font-weight='600' fill='%23F3EFE6'%3ES%3C/text%3E%3C/svg%3E", sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }]
     };
     return ContentService.createTextOutput(JSON.stringify(manifest))
       .setMimeType(ContentService.MimeType.JSON);
