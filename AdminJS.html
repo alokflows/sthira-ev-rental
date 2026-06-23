@@ -1,0 +1,1074 @@
+<script>
+(function () {
+  'use strict';
+
+  // ════════ STATE ════════
+  var A = { token:null, operator:'', role:'Operator', view:'overview', period:'week', bTab:'pending', search:'', silent:false,
+            mutateEpoch:0, authGen:0, ledgerPeriod:'today', ledgerOffset:0 };
+  var C = null;            // cache of everything (filled once on login, refreshed silently)
+  var toastTimer = null, refreshTimer = null, refreshSeq = 0;
+  function isMgr(){ return A.role==='Admin'||A.role==='Manager'; }
+
+  function $(id){ return document.getElementById(id); }
+  function show(id){ var e=$(id); if(e) e.classList.remove('hidden'); }
+  function hide(id){ var e=$(id); if(e) e.classList.add('hidden'); }
+
+  // ════════ HELPERS ════════
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+  function inr(n){
+    n=Math.round(Number(n)||0); var neg=n<0; n=Math.abs(n);
+    var s=String(n), last3=s.length>3?s.slice(-3):s, rest=s.length>3?s.slice(0,-3):'';
+    if(rest) rest=rest.replace(/\B(?=(\d{2})+(?!\d))/g,',')+',';
+    return (neg?'-₹':'₹')+rest+last3;
+  }
+  function initials(n){ return (n||'?').split(' ').filter(Boolean).slice(0,2).map(function(p){return p[0];}).join('').toUpperCase(); }
+  function flash(msg, danger){
+    var t=$('toast'); t.textContent=msg; t.classList.toggle('danger', !!danger);
+    t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(function(){ t.classList.remove('show'); }, 3000);
+  }
+  function val(id){ var el=$(id); return el?String(el.value||'').trim():''; }
+  // Element-level in-button spinner + disable (no id needed) — for delegated-click buttons.
+  function busyEl(el,on){ if(!el) return; el.disabled=on; if(on){ if(el.dataset._h==null){ el.dataset._h=el.innerHTML; } el.innerHTML='<span class="spin"></span>'; } else if(el.dataset._h!=null){ el.innerHTML=el.dataset._h; delete el.dataset._h; el.disabled=false; } }
+  // Lock the clicked control until its mutation promise settles (no double-clicks). The
+  // handler must RETURN its google.script.run promise; if it doesn't, we just unlock.
+  function withBtn(t,p){ if(p&&p.then){ if(t) busyEl(t,true); p.then(function(){ busyEl(t,false); }, function(){ busyEl(t,false); }); } return p; }
+  // Animate views only on real navigation / first paint — never on a silent background sync.
+  function animCls(){ return A.silent ? '' : 'anim-fade'; }
+  // Session persistence: survives an accidental refresh (F5) but is wiped when the
+  // tab is closed — so a refresh keeps you signed in, closing the tab logs you out.
+  function saveSession(){ try{ sessionStorage.setItem('sthira_session', JSON.stringify({ token:A.token, operator:A.operator, role:A.role })); }catch(e){} }
+  function readSession(){ try{ return JSON.parse(sessionStorage.getItem('sthira_session')||'null'); }catch(e){ return null; } }
+  function clearSession(){ try{ sessionStorage.removeItem('sthira_session'); }catch(e){} }
+  function todayStr(){ return new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
+
+  function call(fn, args){
+    args=args||[];
+    return new Promise(function(resolve,reject){ var r=google.script.run.withSuccessHandler(resolve).withFailureHandler(reject); r[fn].apply(r,args); });
+  }
+  function errMsg(e){ return (e&&e.message)?e.message:'Something went wrong. Please try again.'; }
+
+  // ════════ CACHE ACCESS ════════
+  function bkByStatus(st){ return (C.bookings||[]).filter(function(b){ return b.status===st; }); }
+  function bkDueToday(){ var t=todayStr(); return (C.bookings||[]).filter(function(b){ return b.status==='Active' && b.checkOut===t; }); }
+  function availableVehicles(){ return (C.vehicles||[]).filter(function(v){ return v.status==='Available' && v.type!=='Staff'; }); }
+  function modalOpen(){ return $('modalRoot').innerHTML!==''; }
+
+  // ════════ BOOT / AUTH ════════
+  function boot(){
+    // Restore a saved session first so a refresh doesn't kick the operator out.
+    var saved=readSession();
+    if(saved&&saved.token){
+      A.authGen++;
+      A.token=saved.token; A.operator=saved.operator||'Operator'; A.role=saved.role||'Operator';
+      // Show the desk INSTANTLY with a skeleton, then hydrate the data in the
+      // background — resuming a session never blocks on the heavy bootstrap.
+      hide('bootScreen');
+      enterApp();
+      loadBootstrap(function(ok){ if(ok){ afterData(); } else { clearSession(); A.token=null; hide('appShell'); checkSetup(); } });
+      return;
+    }
+    checkSetup();
+  }
+  // Real data has arrived — fill the chrome + re-render the current view in place.
+  function afterData(){ updateChrome(); if(!modalOpen()) rerenderCurrent(); }
+  // Lightweight placeholder shown while the bootstrap is still loading.
+  function renderSkeleton(){
+    var host=$('view-'+A.view); if(!host) return;
+    var sk='<div class="sk" style="background:var(--card);border:1px solid var(--line);border-radius:18px;height:96px;"></div>';
+    host.innerHTML='<div class="anim-fade"><div class="stat-grid">'+sk+sk+sk+sk+'</div>'
+      +'<div class="sk" style="margin-top:18px;height:260px;border-radius:20px;border:1px solid var(--line);background:var(--card);"></div></div>';
+  }
+  function checkSetup(){
+    call('needsSetupWizard').then(function(needs){ hide('bootScreen'); if(needs) showWizard(); else showLogin(); })
+      .catch(function(){ hide('bootScreen'); showLogin(); });
+  }
+
+  function showWizard(){
+    hide('loginScreen'); hide('appShell'); show('wizardScreen');
+    setTimeout(function(){ var n=$('wz-name'); if(n) n.focus(); }, 120);
+    $('wz-save').onclick = function(){
+      var name=String($('wz-name').value||'').trim();
+      var pin=String($('wz-pin').value||'').replace(/\D/g,'');
+      if(!name){ flash('Enter your name.', true); return; }
+      if(pin.length!==6){ flash('Set a 6-digit PIN.', true); return; }
+      var cfg={ managerName:name, managerPin:pin, dayRate:$('wz-rate').value||'300', depositPerWeek:$('wz-deposit').value||'2000',
+        lateFeePerHour:$('wz-late').value||'50', openingCashBalance:$('wz-cash').value||'0', managerLabel:$('wz-manager').value||'Manager' };
+      $('wz-save').disabled=true; $('wz-save').textContent='Setting up…';
+      call('completeSetupWizard',[cfg]).then(function(){ flash('Setup complete. Sign in with your PIN.'); hide('wizardScreen'); showLogin(); })
+        .catch(function(e){ $('wz-save').disabled=false; $('wz-save').textContent='Finish setup'; flash(errMsg(e), true); });
+    };
+  }
+
+  // ── PIN keypad login (physical keyboard live on open) ──
+  var LOGIN = { entry:'', busy:false, active:false, timer:null };
+  function showLogin(){
+    hide('wizardScreen'); hide('appShell'); show('loginScreen');
+    LOGIN.entry=''; LOGIN.busy=false; LOGIN.active=true;
+    var hr=new Date().getHours();
+    $('loginGreet').textContent = hr<12?'Good morning':(hr<17?'Good afternoon':'Good evening');
+    paintDots(false);
+    Array.prototype.forEach.call(document.querySelectorAll('#keypad .key'), function(b){
+      b.onclick=function(){ var k=b.getAttribute('data-key'); if(k==='clear') pinClear(); else if(k==='back') pinBack(); else pinPress(k); };
+    });
+  }
+  function paintDots(isErr){
+    var wrap=$('pinDots'); if(!wrap) return;
+    wrap.classList.toggle('err', !!isErr);
+    Array.prototype.forEach.call(wrap.children, function(sp,i){ sp.classList.toggle('on', i<LOGIN.entry.length); });
+    $('pinErr').textContent = isErr ? 'Incorrect PIN — please try again' : '';
+  }
+  function pinPress(d){ if(LOGIN.busy) return; if($('pinErr').textContent) paintDots(false); LOGIN.entry=(LOGIN.entry+d).slice(0,6); paintDots(false); if(LOGIN.entry.length===6) setTimeout(tryLogin,130); }
+  function pinBack(){ if(LOGIN.busy) return; LOGIN.entry=LOGIN.entry.slice(0,-1); paintDots(false); }
+  function pinClear(){ if(LOGIN.busy) return; LOGIN.entry=''; paintDots(false); }
+  function tryLogin(){
+    var p=LOGIN.entry; LOGIN.busy=true;
+    var pe=$('pinErr'); if(pe){ pe.style.color='var(--muted-2)'; pe.textContent='Signing in…'; }
+    LOGIN.timer=setTimeout(function(){ if(LOGIN.busy){ LOGIN.busy=false; LOGIN.entry=''; if(pe) pe.style.color=''; paintDots(false); $('pinErr').textContent='Taking a while — try again.'; } }, 25000);
+    call('loginWithPin',[p]).then(function(res){
+      clearTimeout(LOGIN.timer); LOGIN.busy=false; if(pe) pe.style.color='';
+      if(res&&res.success){
+        A.authGen++;
+        A.token=res.token; A.operator=res.operatorName||'Operator'; A.role=res.role||'Operator';
+        saveSession();
+        LOGIN.active=false; LOGIN.entry='';
+        // Straight onto the desk — the heavy data hydrates in the background.
+        hide('loginScreen');
+        enterApp();
+        loadBootstrap(function(ok){ if(ok) afterData(); else { hide('appShell'); showLogin(); flash('Could not load the desk. Please try again.', true); } });
+      } else { LOGIN.entry=''; paintDots(true); setTimeout(function(){ if(LOGIN.active) paintDots(false); }, 750); }
+    }).catch(function(e){ clearTimeout(LOGIN.timer); LOGIN.busy=false; LOGIN.entry=''; if(pe) pe.style.color=''; paintDots(false); $('pinErr').textContent=errMsg(e); });
+  }
+  document.addEventListener('keydown', function(e){
+    if(!LOGIN.active||LOGIN.busy) return;
+    if(e.key>='0'&&e.key<='9'){ pinPress(e.key); e.preventDefault(); }
+    else if(e.key==='Backspace'){ pinBack(); e.preventDefault(); }
+    else if(e.key==='Escape'){ pinClear(); }
+  });
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden) return;
+    if(LOGIN.busy){ LOGIN.busy=false; LOGIN.entry=''; paintDots(false); }
+    if(A.token && !modalOpen()) silentRefresh();   // freshen when the operator returns to the tab
+  });
+
+  // Gen-guarded + retried once: a getBootstrap that errors right after login is
+  // almost always the token cache lagging by a beat — retry quietly before failing.
+  // Any response from a previous auth session (you logged out/in again) is ignored,
+  // so stale calls can never flash "session expired" over a fresh desk.
+  function loadBootstrap(done, _retried){
+    var gen=A.authGen;
+    call('getBootstrap',[A.token]).then(function(d){
+      if(gen!==A.authGen) return;
+      C=d; if(d&&d.role) A.role=d.role; done(true);
+    }).catch(function(e){
+      if(gen!==A.authGen) return;                                   // superseded by a newer login/logout
+      if(!_retried && A.token){ setTimeout(function(){ if(gen===A.authGen) loadBootstrap(done, true); }, 800); return; }
+      flash(errMsg(e), true); done(false);
+    });
+  }
+
+  function enterApp(){
+    hide('loginScreen'); hide('wizardScreen'); show('appShell');
+    try{ if(localStorage.getItem('sthira_sidebar_collapsed')==='1'){ var sb=$('appSidebar'); if(sb) sb.classList.add('collapsed'); } }catch(e){}
+    $('side-op-name').textContent=A.operator;
+    $('side-op-initials').textContent=initials(A.operator);
+    $('topDay').textContent=new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'});
+    wireChrome();
+    updateChrome();
+    updateThemeIcon();
+    gotoView('overview');
+    clearInterval(refreshTimer);
+    A.pulseV=null;
+    refreshTimer=setInterval(pollPulse, 4000);   // near-instant: cheap version check
+  }
+
+  // Cross-device live sync without WebSockets (GAS can't push): poll a tiny version
+  // stamp every 4s and only do the heavy reload when something actually changed.
+  function pollPulse(){
+    if(document.hidden || !A.token) return;
+    call('getPulse',[A.token]).then(function(p){
+      if(!p) return;
+      if(A.pulseV==null){ A.pulseV=p.v; return; }
+      if(p.v!==A.pulseV){ A.pulseV=p.v; if(!modalOpen()) silentRefresh(); }
+    }).catch(function(){});
+  }
+
+  // ════════ CHROME ════════
+  function wireChrome(){
+    Array.prototype.forEach.call(document.querySelectorAll('.nav-btn,.bn-btn'), function(b){ b.onclick=function(){ gotoView(b.getAttribute('data-view')); }; });
+    $('newBookingBtn').onclick=openNewBooking;
+    $('alertsBtn').onclick=openAlerts;
+    $('side-op-card').onclick=function(){ doLogout(); };
+    var sc=$('sideCollapse'); if(sc) sc.onclick=toggleSidebar;
+    var tb=$('themeBtn'); if(tb) tb.onclick=toggleTheme;
+    if(!A._docClick){ document.addEventListener('click', onDelegateClick); A._docClick=true; }
+  }
+  // ── Light / dark theme ──
+  var MOON_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+  var SUN_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+  function isDark(){ return document.documentElement.getAttribute('data-theme')==='dark'; }
+  function updateThemeIcon(){ var b=$('themeBtn'); if(b) b.innerHTML=isDark()?SUN_SVG:MOON_SVG; }
+  function toggleTheme(){ var d=document.documentElement; if(isDark()) d.removeAttribute('data-theme'); else d.setAttribute('data-theme','dark'); try{ localStorage.setItem('sthira_theme', isDark()?'dark':'light'); }catch(e){} updateThemeIcon(); }
+  function toggleSidebar(){
+    var sb=$('appSidebar'); if(!sb) return;
+    var collapsed=sb.classList.toggle('collapsed');
+    try{ localStorage.setItem('sthira_sidebar_collapsed', collapsed?'1':'0'); }catch(e){}
+  }
+  function setSync(on){ var d=$('syncDot'); if(d) d.classList.toggle('hidden', !on); }
+  function updateChrome(){
+    if(!C||!C.dashboard) return;
+    var p=C.dashboard.bookings.pending, nb=$('nav-pending');
+    if(p>0){ nb.textContent=p; nb.classList.remove('hidden'); } else nb.classList.add('hidden');
+    var alerts=buildAlerts(C.dashboard), ct=$('alertCt');
+    if(alerts.length){ ct.textContent=alerts.length; ct.classList.remove('hidden'); } else ct.classList.add('hidden');
+  }
+
+  var TITLES={ overview:'Overview', bookings:'Bookings', fleet:'Fleet', money:'Money', reports:'Reports', settings:'Settings' };
+  function gotoView(v){
+    A.view=v;
+    ['overview','bookings','fleet','money','reports','settings'].forEach(function(k){ $('view-'+k).classList.toggle('hidden', k!==v); });
+    Array.prototype.forEach.call(document.querySelectorAll('.nav-btn'), function(b){ b.classList.toggle('active', b.getAttribute('data-view')===v); });
+    Array.prototype.forEach.call(document.querySelectorAll('.bn-btn'), function(b){ b.classList.toggle('on', b.getAttribute('data-view')===v); });
+    $('topTitle').textContent=(v==='overview'?'Good day, '+A.operator.split(' ')[0]:TITLES[v]);
+    rerenderCurrent();
+  }
+  function rerenderCurrent(){
+    if(!C){ return renderSkeleton(); }   // data not in yet → skeleton, never a crash
+    switch(A.view){
+      case 'overview': return renderOverview();
+      case 'bookings': return renderBookings();
+      case 'fleet':    return renderFleet();
+      case 'money':    return renderMoney();
+      case 'reports':  return renderReports();
+      case 'settings': return renderSettings();
+    }
+  }
+
+  // Background refresh — never blocks, never clobbers a modal or settings inputs.
+  // Guarded so a response that left BEFORE a newer optimistic mutation (or a newer
+  // refresh) can't overwrite fresh state — this kills the "maintenance → available →
+  // maintenance" flicker where a stale read landed after the optimistic render.
+  function silentRefresh(opts){
+    opts=opts||{};
+    var seq=++refreshSeq, epoch=A.mutateEpoch;
+    setSync(true);
+    return call('getBootstrap',[A.token]).then(function(d){
+      setSync(false);
+      if(seq!==refreshSeq) return;            // superseded by a newer refresh
+      if(epoch!==A.mutateEpoch) return;        // a mutation happened mid-flight → its own refresh reconciles
+      C=d; if(d&&d.role) A.role=d.role; updateChrome();
+      if(modalOpen()) return;
+      if(A.view==='settings' && !opts.settings) return;  // don't yank fields the operator is editing
+      A.silent=true; rerenderCurrent(); A.silent=false;  // update silently — no re-animation
+    }).catch(function(){ setSync(false); });
+  }
+
+  // ════════ ALERTS ════════
+  function buildAlerts(d){
+    var a=[];
+    if(d.overdueBookings&&d.overdueBookings.length)
+      a.push({ icon:'⏰', title:d.overdueBookings.length+' overdue rental'+(d.overdueBookings.length>1?'s':''), body:d.overdueBookings.map(function(b){return b.riderName+' ('+(b.vehicleLabel||'—')+')';}).join(', '), bg:'var(--terra-tint)', fg:'var(--terra)', go:function(){ A.bTab='active'; gotoView('bookings'); } });
+    if(d.bookings.pending)
+      a.push({ icon:'🕐', title:d.bookings.pending+' booking'+(d.bookings.pending>1?'s':'')+' to confirm', body:'Assign a scooter and take payment', bg:'var(--gold-tint)', fg:'var(--gold-deep)', go:function(){ A.bTab='pending'; gotoView('bookings'); } });
+    if(d.fleet.available===0) a.push({ icon:'🛵', title:'All scooters are out', body:'No vehicles available to rent right now', bg:'var(--terra-tint)', fg:'var(--terra)', go:function(){ gotoView('fleet'); } });
+    else if(d.fleet.available===1) a.push({ icon:'🛵', title:'Only 1 scooter left', body:'Fleet is nearly fully rented', bg:'var(--gold-tint)', fg:'var(--gold-deep)', go:function(){ gotoView('fleet'); } });
+    return a;
+  }
+  var _alertActions=[];
+  function openAlerts(){
+    if(!C||!C.dashboard) return;
+    var alerts=buildAlerts(C.dashboard); _alertActions=alerts;
+    var body=alerts.length ? alerts.map(function(a,i){
+      return '<div data-action="alert-go" data-i="'+i+'" style="display:flex;gap:12px;align-items:flex-start;padding:13px;border-radius:14px;background:'+a.bg+';margin-bottom:10px;cursor:pointer;">'
+        +'<span style="width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.7);display:flex;align-items:center;justify-content:center;font-size:16px;flex:none;">'+a.icon+'</span>'
+        +'<div style="flex:1;"><div style="font-weight:600;font-size:14px;color:'+a.fg+';">'+esc(a.title)+'</div><div style="font-size:13px;color:#7C7565;margin-top:2px;">'+esc(a.body)+'</div></div></div>';
+    }).join('') : '<div class="empty">All clear. Nothing needs you right now. 🌿</div>';
+    openModal('Alerts', (alerts.length||0)+' item(s) need attention', body, '');
+  }
+
+  // ════════ OVERVIEW ════════
+  function renderOverview(){
+    var d=C.dashboard, due=bkDueToday(), alerts=buildAlerts(d); _alertActions=alerts;
+    var oMgr=isMgr();
+    var oCash=oMgr?d.accounting.cashInHand:((C.drawers&&C.drawers.myBalance!=null)?C.drawers.myBalance:0);
+    var stats=[
+      { lbl:'Available', val:String(d.fleet.available), sub:'/ '+d.fleet.total, dot:'#5E9B7A' },
+      { lbl:'Out on rent', val:String(d.fleet.out), sub:'scooters', dot:'#D29A3E' },
+      { lbl:'Due back today', val:String(d.bookings.dueToday), sub:'returns', dot:'#C0673D' },
+      { lbl:'Pending', val:String(d.bookings.pending), sub:'to confirm', dot:'#7E94B8' },
+      { lbl:oMgr?'Cash in hand':'Your cash in hand', val:inr(oCash), sub:'', dot:'#2F5D50', cash:true }
+    ];
+    var statHtml=stats.map(function(s){
+      return '<div class="stat"'+(s.cash?' style="background:var(--pine-tint);border-color:var(--pine-line);"':'')+'><div style="display:flex;align-items:center;justify-content:space-between;"><span class="lbl">'+s.lbl+'</span><span class="dot" style="background:'+s.dot+';"></span></div>'
+        +'<div class="val" style="margin-top:14px;'+(s.cash?'font-size:28px;color:var(--pine);':'')+'">'+s.val+' <span style="font-size:13px;color:var(--faint);font-weight:500;font-family:var(--ui);">'+s.sub+'</span></div></div>';
+    }).join('');
+    var dueHtml=due.length ? due.map(function(b){ return rowItem(b); }).join('') : '<div class="empty">Nothing due back today. A calm desk. 🌿</div>';
+    var alertHtml=alerts.length ? alerts.map(function(a,i){
+      return '<div data-action="alert-ov" data-i="'+i+'" style="display:flex;gap:12px;align-items:flex-start;padding:12px;border-radius:14px;background:'+a.bg+';margin-bottom:9px;cursor:pointer;">'
+        +'<span style="width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.7);display:flex;align-items:center;justify-content:center;font-size:16px;flex:none;">'+a.icon+'</span>'
+        +'<div style="flex:1;"><div style="font-weight:600;font-size:13.5px;color:'+a.fg+';">'+esc(a.title)+'</div><div style="font-size:12.5px;color:#7C7565;">'+esc(a.body)+'</div></div></div>';
+    }).join('') : '<div class="empty" style="padding:18px 0;">All clear.</div>';
+
+    $('view-overview').innerHTML='<div class="'+animCls()+'"><div class="stat-grid">'+statHtml+'</div><div class="split">'
+      +'<div class="panel"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><h2>Due back today</h2><button class="link-btn" data-action="goto" data-view="bookings">View all →</button></div>'+dueHtml+'</div>'
+      +'<div style="display:flex;flex-direction:column;gap:18px;"><div class="panel"><h2 style="margin-bottom:12px;">Needs attention</h2>'+alertHtml+'</div>'
+      +'<div class="cash-hero"><div style="font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;opacity:.8;font-weight:600;">'+(oMgr?'Cash in hand':'Your cash in hand')+'</div>'
+      +'<div style="font-family:var(--serif);font-size:38px;font-weight:500;margin-top:6px;">'+inr(oCash)+'</div>'
+      +'<div style="font-size:13px;opacity:.82;margin-top:2px;">'+(oMgr?'Drawer balance · deposits held '+inr(d.accounting.depositHeldTotal):'Cash you are physically holding')+'</div>'
+      +(oMgr
+        ?'<button data-action="relieve" style="margin-top:16px;width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:#fff;font-weight:600;font-size:14px;cursor:pointer;">Relieve to company</button>'
+        :'<button data-action="handover" style="margin-top:16px;width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:#fff;font-weight:600;font-size:14px;cursor:pointer;">Transfer cash</button>')
+      +'</div></div></div></div>';
+  }
+  function rowItem(b){
+    return '<div data-action="bk-details" data-id="'+esc(b.bookingId)+'" class="row-item" style="cursor:pointer;"><div class="av">'+esc(initials(b.riderName))+'</div>'
+      +'<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(b.riderName)+'</div>'
+      +'<div style="font-size:12.5px;color:var(--muted-2);font-family:var(--mono);">'+esc(b.vehicleLabel||'—')+' · '+esc(b.bookingId)+'</div></div>'
+      +'<div style="display:flex;align-items:center;gap:9px;"><div class="statuspill" style="background:var(--surface-2);color:var(--txt-2);">'+esc(b.checkOut||'Active')+'</div>'
+      +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div></div>';
+  }
+
+  // ════════ BOOKINGS ════════
+  function statusMeta(st){
+    st=String(st||'').toLowerCase();
+    if(st==='active') return { label:'On rent', bg:'var(--pine-tint)', fg:'var(--pine-soft)' };
+    if(st==='available') return { label:'Available', bg:'var(--pine-tint)', fg:'var(--pine-soft)' };
+    if(st==='out') return { label:'Out', bg:'var(--gold-tint)', fg:'var(--gold-deep)' };
+    if(st==='maintenance') return { label:'Maintenance', bg:'var(--surface-2)', fg:'var(--muted-2)' };
+    if(st==='pending') return { label:'Pending', bg:'var(--gold-tint)', fg:'var(--gold-deep)' };
+    if(st==='returned') return { label:'Returned', bg:'var(--surface-2)', fg:'var(--muted-2)' };
+    if(st==='cancelled') return { label:'Cancelled', bg:'var(--terra-tint)', fg:'var(--terra)' };
+    if(st==='deleted') return { label:'Record deleted', bg:'var(--terra-tint)', fg:'var(--terra)' };
+    if(st==='staff') return { label:'Staff', bg:'var(--surface-2)', fg:'#3F5E82' };
+    return { label:st, bg:'#eee', fg:'#555' };
+  }
+  function renderBookings(){
+    var tabs=[['pending','Pending'],['active','Active'],['due','Due today'],['returned','Returned'],['all','All']];
+    var counts={ pending:bkByStatus('Pending').length, active:bkByStatus('Active').length, due:bkDueToday().length, returned:bkByStatus('Returned').length, all:(C.bookings||[]).length };
+    var chipHtml=tabs.map(function(t){ return '<button class="chip'+(A.bTab===t[0]?' on':'')+'" data-action="btab" data-tab="'+t[0]+'">'+t[1]+(counts[t[0]]?'<span class="cct">'+counts[t[0]]+'</span>':'')+'</button>'; }).join('');
+    $('view-bookings').innerHTML='<div class="'+animCls()+'">'
+      +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:18px;"><div style="position:relative;flex:1;min-width:220px;">'
+      +'<svg style="position:absolute;left:14px;top:50%;transform:translateY(-50%);" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9A9384" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>'
+      +'<input id="bk-search" value="'+esc(A.search)+'" placeholder="Search by name, phone or booking ID…" style="width:100%;padding:13px 14px 13px 42px;border:1px solid var(--line-3);border-radius:13px;background:var(--card);font-size:14.5px;color:var(--ink);"></div>'
+      +(isMgr()?'<button class="btn-sm" data-action="add-past-booking" style="background:var(--surface);color:var(--txt-2);border:1px solid var(--line-3);box-shadow:none;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Past booking</button>':'')+'</div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">'+chipHtml+'</div>'
+      +'<div id="bk-list" style="background:var(--card);border:1px solid var(--line);border-radius:20px;overflow:hidden;"></div></div>';
+    var si=$('bk-search');
+    si.oninput=function(){ A.search=si.value; paintBookingList(); };
+    paintBookingList();
+  }
+  function paintBookingList(){
+    var list=$('bk-list'); if(!list) return;
+    var rows;
+    if(A.search.trim()){
+      var q=A.search.trim().toLowerCase();
+      rows=(C.bookings||[]).filter(function(b){ return (b.riderName+' '+b.mobile+' '+b.bookingId+' '+(b.vehicleLabel||'')+' '+(b.cottageName||'')+' '+(b.dlNumber||'')).toLowerCase().indexOf(q)>=0; });
+    } else if(A.bTab==='pending') rows=bkByStatus('Pending');
+    else if(A.bTab==='active') rows=bkByStatus('Active');
+    else if(A.bTab==='due') rows=bkDueToday();
+    else if(A.bTab==='returned') rows=bkByStatus('Returned');
+    else rows=(C.bookings||[]);
+    list.innerHTML = rows.length ? rows.map(bookingRow).join('') : '<div class="empty">No bookings here.</div>';
+  }
+  function bookingRow(b){
+    // Whole row opens the details overlay (where the actions live) — no inline
+    // Confirm/Return/Cancel buttons, so a stray tap can never mutate a booking.
+    var sm=statusMeta(b.status);
+    return '<div data-action="bk-details" data-id="'+esc(b.bookingId)+'" style="display:flex;align-items:center;gap:16px;padding:16px 20px;border-top:1px solid var(--hair);flex-wrap:wrap;cursor:pointer;"><div class="av">'+esc(initials(b.riderName))+'</div>'
+      +'<div style="flex:1.4;min-width:120px;"><div style="font-weight:600;font-size:15px;">'+esc(b.riderName)+'</div><div style="font-size:12.5px;color:var(--muted-2);">'+esc(b.cottageName||'—')+' · '+esc(b.mobile)+'</div></div>'
+      +'<div style="flex:1;min-width:90px;"><div style="font-size:12.5px;color:var(--faint);">Booking</div><div style="font-family:var(--mono);font-size:13px;color:var(--txt-2);">'+esc(b.bookingId)+'</div></div>'
+      +'<div style="flex:1;min-width:96px;"><div style="font-size:12.5px;color:var(--faint);">Scooter</div><div style="font-family:var(--mono);font-size:13px;color:var(--txt-2);">'+esc(b.vehicleLabel||'—')+'</div></div>'
+      +'<div style="flex:1.1;min-width:110px;"><div style="font-size:12.5px;color:var(--faint);">'+(b.status==='Returned'?'Returned':'Until')+'</div><div style="font-size:13px;color:var(--txt-2);">'+esc(b.checkOut||'—')+'</div></div>'
+      +'<div style="flex:none;display:flex;gap:9px;align-items:center;margin-left:auto;"><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';">'+sm.label+'</span>'
+      +'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div></div>';
+  }
+
+  // ════════ FLEET ════════
+  function renderFleet(){
+    var vs=C.vehicles||[];
+    var avail=vs.filter(function(v){return v.status==='Available';}).length;
+    var out=vs.filter(function(v){return v.status==='Out';}).length;
+    var maint=vs.filter(function(v){return v.status==='Maintenance';}).length;
+    var cards=vs.map(function(v){
+      var sm=statusMeta(v.status);
+      var note=v.status==='Out'&&v.activeBooking ? '<span data-action="veh-occupant" data-id="'+esc(v.vehicleId)+'" style="cursor:pointer;color:var(--pine);font-weight:600;text-decoration:underline;text-underline-offset:2px;">With '+esc(v.activeBooking.riderName)+' →</span>' : (v.status==='Maintenance'?'In maintenance':(v.notes?esc(v.notes):'Idle at the desk'));
+      var nextStatus=v.status==='Maintenance'?'Available':'Maintenance';
+      var IB_E='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+      var IB_T='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
+      var IB_W='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5 5L3 18l3 3 6.7-6.7a4 4 0 0 0 5-5l-2.4 2.4-2.1-2.1z"/></svg>';
+      var IB_C='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+      var btns='';
+      if(v.status!=='Out'){
+        btns+='<button class="veh-ib" data-action="veh-toggle" data-id="'+esc(v.vehicleId)+'" data-status="'+nextStatus+'" title="'+(v.status==='Maintenance'?'Mark available':'Send to maintenance')+'">'+(v.status==='Maintenance'?IB_C:IB_W)+'</button>';
+        btns+='<button class="veh-ib" data-action="veh-edit" data-id="'+esc(v.vehicleId)+'" title="Edit">'+IB_E+'</button>';
+        btns+='<button class="veh-ib danger" data-action="veh-delete" data-id="'+esc(v.vehicleId)+'" title="Remove">'+IB_T+'</button>';
+      }
+      return '<div style="background:var(--card);border:1px solid var(--line);border-radius:15px;padding:13px 14px;overflow:hidden;"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><span style="font-family:var(--mono);font-weight:500;font-size:15px;letter-spacing:.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.label)+'</span><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';flex:none;">'+sm.label+'</span></div>'
+        +'<div style="font-size:12px;color:var(--muted-2);margin-top:3px;">'+esc(v.type||'Rental')+(v.vehicleId?' · '+esc(v.vehicleId):'')+'</div>'
+        +'<div style="margin-top:7px;font-size:12px;color:var(--muted-2);word-break:break-word;">'+note+'</div>'
+        +(btns?'<div style="display:flex;gap:6px;margin-top:10px;justify-content:flex-end;">'+btns+'</div>':'')+'</div>';
+    }).join('');
+    $('view-fleet').innerHTML='<div class="'+animCls()+'"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px;">'
+      +'<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13.5px;color:var(--muted);"><div><b style="color:var(--pine-soft);">'+avail+'</b> available</div><div><b style="color:#B07A2E;">'+out+'</b> out</div><div><b style="color:#9A8F7C;">'+maint+'</b> in maintenance</div></div>'
+      +'<button class="btn" data-action="add-vehicle" style="border:1px solid var(--line-2);background:var(--card);color:var(--txt-2);font-weight:600;font-size:13.5px;padding:10px 16px;border-radius:12px;display:flex;align-items:center;gap:7px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add vehicle</button></div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;">'+(cards||'<div class="empty">No scooters yet. Add your first vehicle.</div>')+'</div></div>';
+  }
+
+  // ════════ MONEY (bank-like: drawers + passbook ledger) ════════
+  function ledgerLabel(t){ return ({RentIn:'Rent collected',DepositIn:'Deposit collected',DepositRefund:'Deposit refund',Refund:'Refund paid',LateFeeIn:'Late fee kept',DeductionIn:'Deduction kept',Handover:'Handover (transfer)',Relieve:'Given to company',Opening:'Opening balance',Adjustment:'Adjustment'})[t]||t; }
+  function drawerLine(name, bal, isManager, opName){
+    return '<div class="led-row"><div class="av" style="width:38px;height:38px;">'+esc(initials(name))+'</div>'
+      +'<div style="flex:1;min-width:0;"><div class="nm">'+esc(name)+(isManager?' <span class="pill pill-pine" style="padding:1px 8px;font-size:10.5px;">manager</span>':'')+'</div>'
+      +'<div style="font-size:12px;color:var(--muted-2);">'+(isManager?'Opening + verified handovers':'Cash physically held')+'</div></div>'
+      +(opName&&isMgr()?'<button class="link-btn" data-action="led-operator" data-op="'+esc(opName)+'">View</button>':'')
+      +'<div style="font-family:var(--serif);font-size:20px;font-weight:500;">'+inr(bal)+'</div></div>';
+  }
+  // Manager drill-downs: tap Cash-in-hand / Deposits-held for the per-operator breakdown (renders from cache).
+  function openMoneyDrill(kind){
+    var acc=C.dashboard.accounting, dr=C.drawers||{};
+    var mix=function(c,u){ return 'cash '+inr(c)+' · UPI '+inr(u); };
+    var line=function(name,detail,amt){ return '<div class="led-row"><div class="av" style="width:34px;height:34px;">'+esc(initials(name))+'</div><div style="flex:1;min-width:0;"><div class="nm">'+esc(name)+'</div>'+(detail?'<div style="font-size:12px;color:var(--muted-2);">'+detail+'</div>':'')+'</div><div style="font-family:var(--serif);font-size:18px;font-weight:500;">'+inr(amt)+'</div></div>'; };
+    if(kind==='cash'){
+      var rows=(dr.manager?line(dr.manager.name+' (manager)','Opening + verified handovers',dr.manager.balance):'')
+        +((dr.operators||[]).map(function(o){ return line(o.name,'Cash physically held',o.balance); }).join(''));
+      var body='<div style="font-size:12.5px;color:var(--muted-2);margin-bottom:10px;">Physical cash by drawer · Σ '+inr(acc.cashInHand)+'</div>'+(rows||'<div class="empty">No drawers yet.</div>');
+      openModal('Cash in hand','Per-operator physical cash', body, '<button class="btn-lg" data-action="modal-close">Close</button>');
+    } else {
+      var act=(C.bookings||[]).filter(function(b){ return b.status==='Active' && ((b.depositCash||0)+(b.depositUPI||0))>0; });
+      var rows2=act.map(function(b){ var tot=(b.depositCash||0)+(b.depositUPI||0); return line(b.riderName, mix(b.depositCash||0,b.depositUPI||0)+' · '+esc(b.operatorBooked||'—')+(b.bookingId?' · '+esc(b.bookingId):''), tot); }).join('');
+      var body2='<div style="font-size:12.5px;color:var(--muted-2);margin-bottom:10px;">Held on '+act.length+' active booking'+(act.length===1?'':'s')+' · '+mix(acc.depositHeldCash||0,acc.depositHeldUPI||0)+'</div>'+(rows2||'<div class="empty">No deposits held right now.</div>');
+      openModal('Deposits held','Liability held against active rentals', body2, '<button class="btn-lg" data-action="modal-close">Close</button>');
+    }
+  }
+  function renderMoney(){
+    var acc=C.dashboard.accounting, today=C.dashboard.today, dr=C.drawers||{}, pend=(C.pendingHandovers||[]), mgr=isMgr();
+    // Plain, scannable headline numbers. The cash/UPI split rides as small subtext so
+    // there's one number to read per box, with the breakdown there if you look closer.
+    var mix=function(c,u){ return 'cash '+inr(c)+' &nbsp;·&nbsp; UPI '+inr(u); };
+    var cards;
+    if(mgr){
+      var biz=(today.todayTotal!=null?today.todayTotal:((today.todayCashIn||0)+(today.todayUPIIn||0)));
+      var pCash=(acc.cashIn||0)-(acc.depositHeldCash||0)-(acc.cashRefund||0);   // profit, cash side
+      var pUPI =(acc.upiIn||0)-(acc.depositHeldUPI||0)-(acc.upiRefund||0);      // profit, UPI side
+      cards=[
+        { lbl:'Total business today', val:inr(biz), sub:mix(today.todayCashIn||0, today.todayUPIIn||0), accent:true },
+        { lbl:'Cash in hand',  val:inr(acc.cashInHand),       sub:'physical cash · all drawers', drill:'cash' },
+        { lbl:'Deposits held', val:inr(acc.depositHeldTotal), sub:mix(acc.depositHeldCash||0, acc.depositHeldUPI||0), drill:'deposits' },
+        { lbl:'Profit',        val:inr(acc.profit),           sub:mix(pCash, pUPI) }
+      ];
+      if((acc.relieved||0)>0) cards.push({ lbl:'Given to company', val:inr(acc.relieved), sub:'taken out of the desk' });
+    } else {
+      // Operator view — ONLY their own numbers (no business-wide totals).
+      var om=C.operatorMoney||{};
+      cards=[
+        { lbl:'Your business today', val:inr(om.todayTotal||0),     sub:mix(om.todayCash||0, om.todayUPI||0), accent:true },
+        { lbl:'Your cash in hand',   val:inr(om.cashInHand||0),     sub:'cash you are holding' },
+        { lbl:'Your deposits held',  val:inr(om.depositHeldTotal||0),sub:mix(om.depositHeldCash||0, om.depositHeldUPI||0) },
+        { lbl:'Your profit',         val:inr(om.profit||0),         sub:mix(om.profitCash||0, om.profitUPI||0) },
+        { lbl:'Given to manager',    val:inr(om.givenToManager||0), sub:'handed over & verified' }
+      ];
+    }
+    var cardHtml=cards.map(function(c){ var canDrill=(mgr&&c.drill); var st=(c.accent?'background:var(--pine);color:#fff;border-color:var(--pine);':'')+(canDrill?'cursor:pointer;':''); return '<div class="stat"'+(canDrill?' data-action="money-drill" data-drill="'+c.drill+'"':'')+(st?' style="'+st+'"':'')+'><div class="lbl" style="'+(c.accent?'color:rgba(255,255,255,.82);':'')+'">'+c.lbl+(canDrill?' <span style="color:var(--faint);font-weight:400;">›</span>':'')+'</div><div style="font-family:var(--serif);font-size:22px;font-weight:500;margin-top:6px;'+(c.accent?'color:#fff;':'')+'">'+c.val+'</div><div style="font-size:11px;margin-top:4px;'+(c.accent?'color:rgba(255,255,255,.85);':'color:var(--muted-2);')+'">'+c.sub+'</div></div>'; }).join('');
+
+    // Drawers
+    var drawerHtml;
+    if(mgr){
+      var rows=(dr.manager?drawerLine(dr.manager.name, dr.manager.balance, true, ''):'')
+        +((dr.operators||[]).length?(dr.operators||[]).map(function(o){ return drawerLine(o.name, o.balance, false, o.name); }).join(''):'<div class="empty" style="padding:14px 0;">No operator collections yet.</div>');
+      drawerHtml='<div class="panel"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><h2>Drawers</h2><span style="font-size:12px;color:var(--muted-2);">Σ = '+inr(acc.cashInHand)+'</span></div>'+rows+'</div>';
+    } else {
+      drawerHtml='<div class="panel"><h2 style="margin-bottom:6px;">Your drawer</h2><div style="font-family:var(--serif);font-size:40px;font-weight:500;color:var(--pine);">'+inr((dr.myBalance!=null?dr.myBalance:0))+'</div><div style="font-size:13px;color:var(--muted-2);margin-top:2px;">Cash you are physically holding. Transfer it to the manager or another operator — they verify it.</div><button class="btn-sm" data-action="handover" style="margin-top:14px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Transfer cash</button></div>';
+    }
+
+    // Transfers waiting for ME to verify (server scopes pend to the recipient: a manager
+    // sees handovers to the manager pool; an operator sees transfers sent to them).
+    var pendHtml='<div class="panel"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><h2>Transfers to verify</h2>'+(pend.length?'<span class="badge-strict">'+pend.length+' pending</span>':'')+'</div>'
+        +(pend.length?pend.map(function(h){ return '<div class="led-row"><div style="flex:1;min-width:0;"><div class="nm">'+inr(h.amountCash)+' from '+esc(h.handedBy||'—')+'</div><div style="font-size:12px;color:var(--muted-2);">'+esc(h.timestamp)+(h.note?' · '+esc(h.note):'')+'</div></div>'
+          +'<button class="btn" data-action="ho-reject" data-id="'+esc(h.handoverId)+'" style="padding:8px 14px;border-radius:10px;border:1px solid var(--terra-tint);background:var(--terra-tint);color:var(--terra);font-size:13px;font-weight:600;">Reject</button>'
+          +'<button class="btn" data-action="ho-verify" data-id="'+esc(h.handoverId)+'" style="padding:8px 14px;border-radius:10px;border:none;background:var(--pine);color:#fff;font-size:13px;font-weight:600;">Verify</button></div>'; }).join('')
+          :'<div class="empty" style="padding:14px 0;">Nothing waiting. 🌿</div>')+'</div>';
+
+    // Operator only — the status of transfers they have SENT.
+    var outHtml='';
+    if(!mgr){
+      var mine=(C.handovers||[]).filter(function(h){ return h.handedBy===A.operator; });
+      outHtml='<div class="panel"><h2 style="margin-bottom:6px;">Your transfers</h2>'
+        +(mine.length?mine.map(function(h){ var stc=h.status==='Approved'?'var(--pine)':(h.status==='Rejected'?'var(--terra)':'var(--gold-deep)'); return '<div class="led-row"><div style="flex:1;min-width:0;"><div class="nm">'+inr(h.amountCash)+' → '+esc(h.receivedBy||'—')+'</div><div style="font-size:12px;color:var(--muted-2);">'+esc(h.timestamp)+(h.note?' · '+esc(h.note):'')+'</div></div><span class="statuspill" style="background:var(--surface-2);color:'+stc+';">'+esc(h.status)+'</span></div>'; }).join('')
+          :'<div class="empty" style="padding:14px 0;">No transfers yet.</div>')+'</div>';
+    }
+
+    // Passbook
+    var chips=[['today','Today'],['7d','7 days'],['30d','30 days'],['all','All']].map(function(p){ return '<button class="chip'+(A.ledgerPeriod===p[0]?' on':'')+'" data-action="led-period" data-p="'+p[0]+'">'+p[1]+'</button>'; }).join('');
+    var filterNote=A.ledgerFilterOp?'<button class="link-btn" data-action="led-clearfilter">Showing '+esc(A.ledgerFilterOp)+' ✕</button>':'';
+    var passbook='<div class="panel"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;"><h2>Passbook</h2><div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;">'+filterNote+chips
+      +(mgr?'<button class="btn" data-action="refund" style="padding:8px 13px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-size:13px;font-weight:600;">Refund</button>':'')
+      +(mgr?'<button class="btn" data-action="run-audit" title="Self-audit the books" style="padding:8px 13px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-size:13px;font-weight:600;">Audit</button>':'')+'</div></div>'
+      +'<div id="led-list"><div class="empty"><span class="spin" style="color:var(--pine);"></span></div></div></div>';
+
+    var actions=mgr?'<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 18px;"></div>':'';
+    $('view-money').innerHTML='<div class="'+animCls()+'"><div class="stat-grid">'+cardHtml+'</div>'+actions
+      +'<div class="split" style="margin-top:18px;">'+drawerHtml+pendHtml+outHtml+'</div>'
+      +'<div style="margin-top:18px;">'+passbook+'</div></div>';
+    fetchLedger(true);
+  }
+  function fetchLedger(reset){
+    if(reset){ A.ledgerOffset=0; C.ledgerRows=[]; C.ledgerHasMore=false; }
+    call('getLedger',[A.ledgerPeriod, A.ledgerOffset, 20, A.token]).then(function(res){
+      if(A.view!=='money') return;
+      C.ledgerRows=(C.ledgerRows||[]).concat(res.rows||[]); C.ledgerHasMore=res.hasMore; A.ledgerOffset+=(res.rows||[]).length;
+      renderLedger();
+    }).catch(function(e){ var el=$('led-list'); if(el) el.innerHTML='<div class="empty">'+esc(errMsg(e))+'</div>'; });
+  }
+  function renderLedger(){
+    var el=$('led-list'); if(!el) return;
+    var rows=(C.ledgerRows||[]);
+    if(A.ledgerFilterOp) rows=rows.filter(function(r){ return r.operator===A.ledgerFilterOp; });
+    if(!rows.length){ el.innerHTML='<div class="empty">No transactions in this period.</div>'; return; }
+    el.innerHTML=rows.map(ledgerRow).join('')+(C.ledgerHasMore?'<div style="text-align:center;padding:14px 0 2px;"><button class="link-btn" data-action="led-more">Load more</button></div>':'');
+  }
+  function ledgerRow(r){
+    var cls=r.direction==='debit'?'led-debit':(r.direction==='transfer'?'led-transfer':'led-credit');
+    var amt=(r.direction==='debit'?'− ':(r.direction==='transfer'?'⇄ ':'+ '))+inr(r.amount);
+    return '<div class="led-row"><div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:14px;">'+esc(ledgerLabel(r.type))+(r.bookingId?' · <span style="font-family:var(--mono);color:var(--muted-2);font-size:12px;">'+esc(r.bookingId)+'</span>':'')+'</div>'
+      +'<div style="font-size:12px;color:var(--muted-2);">'+esc(r.ts)+' · '+esc(r.operator||'—')+(r.note?' · '+esc(r.note):'')+'</div></div>'
+      +'<div style="text-align:right;"><div class="led-amt '+cls+'">'+amt+'</div><div style="font-size:11px;color:var(--faint);">'+esc(r.account)+(r.balanceAfter==null?' · —':' · bal '+inr(r.balanceAfter))+'</div></div></div>';
+  }
+
+  // ════════ REPORTS ════════
+  function renderReports(){
+    var a=C.analytics&&C.analytics[A.period];
+    var periods=[['week','7 days'],['month','30 days'],['quarter','90 days']];
+    var ptoggle=periods.map(function(p){ return '<button class="chip'+(A.period===p[0]?' on':'')+'" data-action="period" data-p="'+p[0]+'">'+p[1]+'</button>'; }).join('');
+    if(!a){
+      $('view-reports').innerHTML='<div class="'+animCls()+'"><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">'+ptoggle+'</div><div class="empty"><span class="spin" style="color:var(--pine);"></span></div></div>';
+      call('getAnalyticsData',[A.period,A.token]).then(function(res){ C.analytics[A.period]=res; if(A.view==='reports') renderReports(); }).catch(function(e){ $('view-reports').innerHTML='<div class="empty">'+esc(errMsg(e))+'</div>'; });
+      return;
+    }
+    var series=a.series||[];
+    var maxRev=Math.max(1, Math.max.apply(null, series.map(function(d){return d.revenue;}).concat([0])));
+    var bars=series.length ? series.map(function(d){ var h=Math.round(d.revenue/maxRev*100); return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px;height:100%;justify-content:flex-end;min-width:28px;"><div style="font-size:11px;color:var(--faint);font-family:var(--mono);">'+(d.revenue?('₹'+(d.revenue/1000).toFixed(1)+'k'):'')+'</div><div style="width:100%;max-width:42px;height:'+Math.max(2,h)+'%;background:var(--pine);border-radius:8px 8px 0 0;"></div><div style="font-size:11.5px;color:#7C7565;white-space:nowrap;">'+esc(d.date)+'</div></div>'; }).join('') : '<div class="empty" style="margin:auto;">No activity in this period yet.</div>';
+    var stats=[{ lbl:'Revenue (rent)', val:inr(a.totalRevenue) },{ lbl:'Bookings', val:String(a.totalBookings) },{ lbl:'Late fees', val:inr(a.totalLateFees) },{ lbl:'Deductions', val:inr(a.totalDeductions) }];
+    var statHtml=stats.map(function(s){ return '<div class="stat"><div class="lbl">'+s.lbl+'</div><div style="font-family:var(--serif);font-size:30px;font-weight:500;margin-top:10px;">'+s.val+'</div></div>'; }).join('');
+    var s=C.settings||{};
+    var repCard = isMgr() ? '<div class="panel" style="margin-top:18px;"><h2 style="margin-bottom:4px;">Email &amp; export</h2>'
+      +'<p style="margin:0 0 14px;font-size:13.5px;color:var(--muted-2);">Send or download this report. <b>Detailed</b> adds every booking + ledger transaction; <b>summary</b> is the totals only.</p>'
+      +'<div class="gf"><div><label class="field-label">Reporting email (To)</label><input id="rep-to" class="field" type="email" value="'+esc(s.reportEmail||'')+'" placeholder="manager@…"></div>'
+      +'<div><label class="field-label">CC (comma-separated)</label><input id="rep-cc" class="field" value="'+esc(s.reportCC||'')+'" placeholder="owner@…, accounts@…"></div></div>'
+      +'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;">'
+      +'<label style="display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600;color:var(--txt-2);cursor:pointer;"><input id="rep-detailed" type="checkbox" style="width:18px;height:18px;">Detailed</label>'
+      +'<button class="btn btn-primary" data-action="save-reports" style="padding:11px 16px;">Save email</button>'
+      +'<button class="btn" data-action="email-report" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:11px 16px;border-radius:12px;">Email this report</button>'
+      +'<button class="btn" data-action="export-csv" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:11px 16px;border-radius:12px;">Download CSV</button></div></div>' : '';
+    $('view-reports').innerHTML='<div class="'+animCls()+'"><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">'+ptoggle+'</div><div class="stat-grid">'+statHtml+'</div>'
+      +'<div class="panel" style="margin-top:18px;"><h2 style="margin-bottom:6px;">Rent revenue · '+(A.period==='week'?'last 7 days':A.period==='month'?'last 30 days':'last 90 days')+'</h2><div style="display:flex;align-items:flex-end;gap:10px;height:230px;padding-top:24px;overflow-x:auto;">'+bars+'</div></div>'+repCard+'</div>';
+  }
+  function saveReports(){ var u={ reportEmail:val('rep-to'), reportCC:val('rep-cc') }; C.settings.reportEmail=u.reportEmail; C.settings.reportCC=u.reportCC; flash('Saving…'); return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Reporting email saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+  function emailReportNow(){ var det=$('rep-detailed')?$('rep-detailed').checked:false; flash('Sending report…'); return call('emailReport',[A.period, det, A.token]).then(function(r){ flash('Report sent to '+r.to+(r.cc?' (cc '+r.cc+')':'')+'.'); }).catch(function(e){ flash(errMsg(e), true); }); }
+  function csvCell(v){ v=String(v==null?'':v); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
+  function exportCSV(){
+    var det=$('rep-detailed')?$('rep-detailed').checked:false;
+    var bks=(C.bookings||[]).filter(function(b){ return b.status!=='Pending'&&b.status!=='Cancelled'; }), csv;
+    if(det){
+      var head=['BookingId','Status','Rider','Mobile','Cottage','CheckIn','CheckOut','Days','Vehicle','Rent','Deposit','Total','RentCash','RentUPI','DepCash','DepUPI','LateFee','Deductions','Refund','BookedBy','ReturnedBy'];
+      var lines=bks.map(function(b){ return [b.bookingId,b.status,b.riderName,b.mobile,b.cottageName,b.checkIn,b.checkOut,b.days,b.vehicleLabel,b.rentAmount,b.depositAmount,b.totalAmount,b.rentCash,b.rentUPI,b.depositCash,b.depositUPI,b.lateFee,b.deductionTotal,b.refundTotal,b.operatorBooked,b.operatorReturned].map(csvCell).join(','); });
+      csv=[head.join(',')].concat(lines).join('\n');
+    } else {
+      var acc=C.dashboard.accounting;
+      csv='Metric,Value\n'+[['Bookings',bks.length],['Cash on hand',acc.cashInHand],['Deposits held',acc.depositHeldTotal],['Profit',acc.profit],['Cash collected',acc.cashIn],['UPI collected',acc.upiIn],['Refunds paid',acc.cashRefund+acc.upiRefund]].map(function(r){ return r[0]+','+r[1]; }).join('\n');
+    }
+    var a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv); a.download=(det?'sthira-detailed':'sthira-summary')+'-report.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a); flash('CSV downloaded.');
+  }
+
+  // ════════ SETTINGS ════════
+  function renderSettings(){
+    var s=C.settings||{}, ops=C.operators||[], cots=C.cottages||[];
+    var guestUrl=(C.webAppUrl||window.WEB_APP_URL||'')+(((C.webAppUrl||window.WEB_APP_URL||'').indexOf('?')>=0)?'&':'?')+'mode=rider';
+    var emailOn=String(s.emailEnabled||'no').toLowerCase()==='yes';
+    var sortedOps=ops.slice().sort(function(a,b){ var am=(a.role==='Admin'||a.role==='Manager')?0:1, bm=(b.role==='Admin'||b.role==='Manager')?0:1; return am-bm; });
+    var opRows=sortedOps.map(function(o){
+      var isM=(o.role==='Admin'||o.role==='Manager');
+      return '<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--hair);flex-wrap:wrap;"><div class="av">'+esc(initials(o.name))+'</div>'
+        +'<div style="flex:1;min-width:120px;"><div style="font-weight:600;font-size:14.5px;">'+esc(o.name)+(isM?' <span class="pill pill-pine" style="padding:1px 8px;font-size:10.5px;">Manager</span>':'')+(o.name===A.operator?' <span style="font-size:11px;color:var(--pine);font-weight:600;">· you</span>':'')+'</div><div style="font-size:12px;color:var(--muted-2);">'+(isM?'Manager':'Operator')+'</div></div>'
+        +'<div style="display:flex;align-items:center;gap:6px;"><input class="field" id="op-email-'+esc(o.operatorId)+'" value="'+esc(o.email||'')+'" placeholder="email (reports)" style="width:160px;padding:9px;font-size:12.5px;"><button class="link-btn" data-action="op-setemail" data-id="'+esc(o.operatorId)+'">Save</button></div>'
+        +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:12px;color:var(--faint);font-weight:600;">PIN</span><input class="field" id="op-pin-'+esc(o.operatorId)+'" value="" placeholder="••••••" maxlength="6" inputmode="numeric" style="width:90px;text-align:center;font-family:var(--mono);letter-spacing:.2em;padding:9px;"><button class="link-btn" data-action="op-setpin" data-id="'+esc(o.operatorId)+'">Reset</button></div>'
+        +(isM?'<span style="width:62px;flex:none;"></span>':'<button class="link-btn" data-action="op-remove" data-id="'+esc(o.operatorId)+'" style="color:var(--terra);">Remove</button>')+'</div>';
+    }).join('');
+    var cotRows=cots.map(function(c){ return '<div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1px solid var(--hair);"><div style="flex:1;font-weight:600;font-size:14.5px;">'+esc(c.name)+'</div><button class="link-btn" data-action="cot-remove" data-id="'+esc(c.cottageId)+'" style="color:var(--terra);">Remove</button></div>'; }).join('');
+
+    // Just two groups: everything the GUEST FORM uses (pricing, cottages, email, map, link)
+    // and OPERATORS (people + access + powers). Operators see only the guest-form link.
+    var SETTABS=isMgr()
+      ? [['guestform','Guest form'],['operators','Operators']]
+      : [['guestform','Guest form']];
+    if(!A.setTab || !SETTABS.some(function(t){ return t[0]===A.setTab; })) A.setTab=SETTABS[0][0];
+    var setChips=SETTABS.map(function(t){ return '<button class="chip'+(A.setTab===t[0]?' on':'')+'" data-action="settab" data-t="'+t[0]+'">'+esc(t[1])+'</button>'; }).join('');
+
+    var gPricing=card('Pricing &amp; timings','Applies to new bookings. Changes take effect immediately.',
+          '<div class="gf"><div><label class="field-label">Daily rate (₹)</label><input id="set-rate" class="field" type="number" value="'+esc(s.dayRate||'300')+'"></div>'
+        +'<div><label class="field-label">Deposit / week (₹)</label><input id="set-deposit" class="field" type="number" value="'+esc(s.depositPerWeek||'2000')+'"></div>'
+        +'<div><label class="field-label">Late fee / hour (₹)</label><input id="set-late" class="field" type="number" value="'+esc(s.lateFeePerHour||'50')+'"></div>'
+        +'<div><label class="field-label">Grace (minutes)</label><input id="set-grace" class="field" type="number" value="'+esc(s.graceMinutes||'30')+'"></div>'
+        +'<div><label class="field-label">Desk opens</label><input id="set-start" class="field" type="time" value="'+esc(s.rentalStartTime||'09:00')+'"></div>'
+        +'<div><label class="field-label">Return by (late after)</label><input id="set-end" class="field" type="time" value="'+esc(s.rentalEndTime||'21:00')+'"></div></div>'
+        +'<div style="font-size:12.5px;color:var(--muted-2);margin-top:10px;">Rentals run '+esc(s.rentalStartTime||'09:00')+'–'+esc(s.rentalEndTime||'21:00')+'. Returns after the end time incur a late fee (after the grace window). This window also shows on the guest form.</div>'
+        +'<button class="btn btn-primary" data-action="save-pricing" style="margin-top:16px;">Save pricing &amp; timings</button>');
+    var gCottages=card('Cottages / accommodations','These populate the guest form dropdown.',
+          cotRows+'<div style="display:flex;gap:8px;margin-top:14px;"><input id="cot-newname" class="field" placeholder="Add a cottage…"><button class="btn btn-primary" data-action="cot-add" style="padding:12px 18px;">Add</button></div>');
+    var gOperatorsList=card('Operators &amp; access','Each operator signs in with their own 6-digit PIN — it identifies who is at the desk. The manager is shown at the top.',
+          opRows+'<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;"><input id="op-newname" class="field" placeholder="New operator name…" style="flex:1;min-width:140px;"><input id="op-newpin" class="field" type="text" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" style="width:120px;"><button class="btn btn-primary" data-action="op-add" style="padding:12px 18px;">Add</button></div>');
+    var gAccess=card('Desk access','Manager label shown across the desk.',
+          '<div class="gf"><div><label class="field-label">Manager label</label><input id="set-manager" class="field" type="text" value="'+esc(s.managerLabel||'Manager')+'"></div></div>'
+        +'<button class="btn btn-primary" data-action="save-access" style="margin-top:16px;">Save</button>');
+    var gPowers=card('Manager powers','Manager-only abilities. Turn these off once your data is settled to lock them down.',
+          '<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;margin-bottom:12px;"><input id="set-allow-past" type="checkbox" '+(String(s.allowPastBookings||'yes').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Allow adding past (backdated) bookings</label>'
+        +'<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;"><input id="set-allow-delete" type="checkbox" '+(String(s.allowDeleteBookings||'yes').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Allow deleting bookings <span style="font-weight:500;color:var(--muted-2);">(the ledger is always kept)</span></label>'
+        +'<button class="btn btn-primary" data-action="save-powers" style="margin-top:16px;">Save powers</button>');
+
+    var gEmail=card('Confirmation email','Sent to the guest when you confirm a booking (allocate a scooter).',
+          '<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;"><input id="set-email-on" type="checkbox" '+(emailOn?'checked':'')+' style="width:18px;height:18px;">Send confirmation emails</label>'
+        +'<div class="gf" style="margin-top:14px;"><div><label class="field-label">From name</label><input id="set-email-from" class="field" value="'+esc(s.emailFromName||'Sthira Rentals')+'"></div>'
+        +'<div><label class="field-label">Reply-to (optional)</label><input id="set-email-reply" class="field" value="'+esc(s.emailReplyTo||'')+'"></div></div>'
+        +'<button class="btn btn-primary" data-action="save-email" style="margin-top:16px;">Save email settings</button>'
+        +'<div style="border-top:1px solid var(--hair);margin-top:18px;padding-top:18px;">'
+        +'<div class="field-label">Ashram map '+(s.mapEmailFileId?'<span style="color:var(--pine-soft);">· set ✓</span>':'<span style="color:var(--gold-deep);">· not set</span>')+' — shown on the guest form &amp; embedded in the email.</div>'
+        +(s.mapEmailFileId?'<img src="https://drive.google.com/thumbnail?id='+esc(s.mapEmailFileId)+'&sz=w600" alt="map" style="display:block;width:100%;max-width:320px;border-radius:12px;border:1px solid var(--line);margin:10px 0;" onerror="this.style.display=\'none\'">':'')
+        +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px;"><button class="btn" data-action="map-computer" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Upload from computer</button>'
+        +'<button class="btn" data-action="map-drive" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Use a Google Drive image</button>'
+        +'<input id="map-file" type="file" accept="image/*" class="hidden"></div>'
+        +'<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;"><input id="test-email" class="field" type="email" placeholder="you@example.com" style="flex:1;min-width:180px;"><button class="btn" data-action="send-test" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Send test email</button></div>'
+        +'<div style="font-size:12.5px;color:var(--muted-2);margin-top:10px;">Emails left today: <b id="emailQuota">…</b></div></div>');
+
+    var gLink=card('Guest form link','Share the agreement link with riders.',
+          '<label class="field-label">Public guest form link</label><div style="display:flex;gap:8px;flex-wrap:wrap;"><input class="field" id="guest-link" readonly value="'+esc(guestUrl)+'" style="flex:1;min-width:180px;"><button class="btn" data-action="copy-link" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Copy</button><button class="btn" data-action="open-link" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Open</button></div>'
+        +(isMgr()?'<button class="btn" data-action="open-sheet" style="margin-top:14px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Open data spreadsheet ↗</button>':''));
+
+    // Guest-form group = everything riders touch (managers edit; operators just get the link).
+    var gGuestForm=(isMgr()?gPricing+gCottages+gEmail:'')+gLink;
+    // Operators group (manager-only) = people + access + powers.
+    var gOperators=gOperatorsList+gAccess+gPowers;
+
+    var groups={ guestform:gGuestForm, operators:gOperators };
+    $('view-settings').innerHTML='<div class="'+animCls()+'">'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">'+setChips+'</div>'
+      +'<div class="set-grid">'+(groups[A.setTab]||gGuestForm)+'</div>'
+      +'<div style="text-align:center;padding:8px 0 20px;"><button class="link-btn" data-action="logout" style="color:var(--terra);">Lock desk &amp; log out</button></div></div>';
+
+    if(A.setTab==='guestform' && isMgr()){
+      var mf=$('map-file'); if(mf) mf.onchange=onMapUpload;
+      // email quota in the background — never blocks opening settings
+      call('getEmailQuota',[A.token]).then(function(q){ var el=$('emailQuota'); if(el) el.textContent=(q&&q.remaining!=null)?q.remaining:'—'; }).catch(function(){ var el=$('emailQuota'); if(el) el.textContent='—'; });
+    }
+  }
+  function card(title, sub, body){ return '<div class="panel" style="margin-bottom:18px;"><h2 style="margin-bottom:'+(sub?'4px':'14px')+';">'+title+'</h2>'+(sub?'<p style="margin:0 0 18px;font-size:13.5px;color:var(--muted-2);">'+sub+'</p>':'')+body+'</div>'; }
+
+  function onMapUpload(e){
+    var file=e.target.files&&e.target.files[0]; if(!file) return;
+    var reader=new FileReader();
+    reader.onload=function(){ flash('Uploading map…'); call('uploadMapImage',[reader.result,A.token]).then(function(){ flash('Map image uploaded ✓'); silentRefresh({settings:true}); }).catch(function(err){ flash(errMsg(err), true); }); };
+    reader.readAsDataURL(file);
+  }
+
+  // ════════ MODALS ════════
+  function openModal(title, sub, body, footer){
+    $('modalRoot').innerHTML='<div class="modal-overlay" data-action="modal-bg"><div class="modal" data-action="modal-stop">'
+      +'<div class="modal-head"><div><div class="ttl">'+esc(title)+'</div>'+(sub?'<div class="sub">'+esc(sub)+'</div>':'')+'</div><button class="x-btn" data-action="modal-close">✕</button></div>'
+      +'<div class="modal-body">'+body+'</div>'+(footer?'<div class="modal-foot">'+footer+'</div>':'')+'</div></div>';
+  }
+  function closeModal(){ $('modalRoot').innerHTML=''; }
+
+  // ── New booking (desk quick-entry) ──
+  function openNewBooking(){
+    var opts='<option value="">Select…</option>'+(C.cottages||[]).map(function(c){ return '<option>'+esc(c.name)+'</option>'; }).join('');
+    var today=new Date(); var iso=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+    var body='<div class="gf">'
+      +'<div class="full"><label class="field-label">Guest name *</label><input id="nb-name" class="field" placeholder="Full name"></div>'
+      +'<div><label class="field-label">Mobile *</label><input id="nb-mobile" class="field" type="tel" placeholder="+91…"></div>'
+      +'<div><label class="field-label">Driving licence *</label><input id="nb-dl" class="field" placeholder="DL number"></div>'
+      +'<div><label class="field-label">Cottage *</label><select id="nb-cottage" class="field">'+opts+'</select></div>'
+      +'<div><label class="field-label">Email</label><input id="nb-email" class="field" type="email" placeholder="for confirmation"></div>'
+      +'<div><label class="field-label">Check-in *</label><input id="nb-checkin" class="field" type="date" value="'+iso+'" min="'+iso+'"></div>'
+      +'<div><label class="field-label">Check-out *</label><input id="nb-checkout" class="field" type="date" value="'+iso+'" min="'+iso+'"></div></div>'
+      +'<div class="summary"><div class="sr"><span style="color:var(--muted);">Estimate</span><span id="nb-est" style="font-weight:600;">—</span></div><div style="font-size:12.5px;color:var(--muted-2);">Payment is collected at confirmation, when you allocate a scooter.</div></div>'
+      +'<label style="display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--txt-2);margin-top:14px;cursor:pointer;"><input id="nb-consent" type="checkbox" style="width:18px;height:18px;">The guest has read &amp; accepted the rental terms at the desk.</label>'
+      +'<div style="text-align:center;margin-top:14px;"><button class="link-btn" data-action="open-link">or open the self-serve guest form ↗</button></div>';
+    var footer='<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="nb-submit">Create booking</button>';
+    openModal('New booking','Register a guest and reserve a scooter', body, footer);
+    function recalc(){ var p=window.Sthira.pricePreview(window.Sthira.daysInclusive($('nb-checkin').value,$('nb-checkout').value), (C.settings&&C.settings.dayRate)||300, (C.settings&&C.settings.depositPerWeek)||2000); $('nb-est').textContent=p.days+'d · '+inr(p.rent)+' rent + '+inr(p.deposit)+' deposit'; }
+    $('nb-checkin').onchange=function(){ if($('nb-checkout').value<$('nb-checkin').value) $('nb-checkout').value=$('nb-checkin').value; recalc(); };
+    $('nb-checkout').onchange=recalc; recalc();
+  }
+  function submitNewBooking(){
+    var name=val('nb-name'), mobile=val('nb-mobile'), dl=val('nb-dl'), cottage=val('nb-cottage'), email=val('nb-email'), ci=val('nb-checkin'), co=val('nb-checkout');
+    if(!name){ flash('Enter the guest name.', true); return; }
+    if(!mobile){ flash('Enter a mobile number.', true); return; }
+    if(!dl){ flash('Enter the driving licence number.', true); return; }
+    if(!cottage){ flash('Select a cottage.', true); return; }
+    if(!ci||!co){ flash('Pick check-in and check-out dates.', true); return; }
+    if(!$('nb-consent').checked){ flash('Please confirm the guest accepted the terms.', true); return; }
+    var days=window.Sthira.daysInclusive(ci,co);   // server recomputes authoritatively
+    var payload={ riderName:name, dlNumber:dl, cottageName:cottage, mobile:mobile, altMobile:'', email:email, checkIn:ci, checkOut:co, days:days, consentAccepted:true, consentAt:new Date().toISOString() };
+    flash('Creating booking…');
+    return call('createPendingBooking',[payload]).then(function(res){ closeModal(); if(res&&res.success){ flash('Booking '+res.bookingId+' created — confirm to assign a scooter.'); A.bTab='pending'; gotoView('bookings'); silentRefresh(); } else flash((res&&res.message)||'Could not create booking.', true); })
+      .catch(function(e){ flash(errMsg(e), true); });
+  }
+
+  // ── Confirm (booking + vehicles from cache → instant open) ──
+  function openConfirm(bookingId){
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(!b){ flash('Booking not found — refreshing.', true); silentRefresh(); return; }
+    var vehicles=availableVehicles();
+    window._confirmCtx={ b:b, method:'cash' };
+    var opts='<option value="">Select an available scooter…</option>'+vehicles.map(function(v){ return '<option value="'+esc(v.vehicleId)+'">'+esc(v.label)+(v.notes?' · '+esc(v.notes):'')+'</option>'; }).join('');
+    var body='<label class="field-label">Assign scooter</label><select id="cf-scooter" class="field">'+opts+'</select>'
+      +(vehicles.length?'':'<div style="font-size:12.5px;color:var(--terra);margin-top:8px;">No scooters available. Free one up in Fleet first.</div>')
+      +'<div style="margin:18px 0 8px;"><label class="field-label">Payment method</label><div style="display:flex;gap:9px;"><button class="seg on" data-action="cf-method" data-m="cash">Cash</button><button class="seg" data-action="cf-method" data-m="upi">UPI</button><button class="seg" data-action="cf-method" data-m="split">Split</button></div></div>'
+      +'<div id="cf-split" class="hidden"><div class="gf"><div><label class="field-label">Cash (₹)</label><input id="cf-cash" class="field" type="number" placeholder="0"></div><div><label class="field-label">UPI (₹)</label><input id="cf-upi" class="field" type="number" placeholder="0"></div></div><div id="cf-splitnote" style="font-size:12.5px;margin-top:8px;"></div></div>'
+      +'<div class="summary"><div class="sr"><span style="color:var(--muted);">Rental · '+b.days+' day(s)</span><span style="font-weight:600;">'+inr(b.rentAmount)+'</span></div><div class="sr"><span style="color:var(--muted);">Deposit (held)</span><span style="font-weight:600;">'+inr(b.depositAmount)+'</span></div><div class="sr total"><span style="font-weight:600;">Total to collect</span><span class="amt">'+inr(b.totalAmount)+'</span></div></div>';
+    var footer='<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="cf-submit">Take payment &amp; hand over</button>';
+    openModal('Confirm booking', b.riderName+' · '+b.bookingId, body, footer);
+    ['cf-cash','cf-upi'].forEach(function(id){ var el=$(id); if(el) el.oninput=cfSplitNote; });
+  }
+  function cfMethod(m){ window._confirmCtx.method=m; Array.prototype.forEach.call(document.querySelectorAll('[data-action="cf-method"]'), function(btn){ btn.classList.toggle('on', btn.getAttribute('data-m')===m); }); $('cf-split').classList.toggle('hidden', m!=='split'); cfSplitNote(); }
+  function cfSplitNote(){ if(window._confirmCtx.method!=='split') return; var total=window._confirmCtx.b.totalAmount, cash=Number(val('cf-cash'))||0, upi=Number(val('cf-upi'))||0, rem=total-cash-upi, note=$('cf-splitnote'); if(!note) return; if(rem===0){ note.textContent='✓ Split balances exactly'; note.style.color='var(--pine-soft)'; } else if(rem>0){ note.textContent=inr(rem)+' still to allocate'; note.style.color='var(--terra)'; } else { note.textContent=inr(-rem)+' over total'; note.style.color='var(--terra)'; } }
+  function submitConfirm(){
+    var ctx=window._confirmCtx, b=ctx.b, vehicleId=val('cf-scooter');
+    if(!vehicleId){ flash('Assign a scooter.', true); return; }
+    var payment={ mode:ctx.method };
+    if(ctx.method==='split'){ var cash=Number(val('cf-cash'))||0, upi=Number(val('cf-upi'))||0; if(Math.round(cash+upi)!==Math.round(b.totalAmount)){ flash('Split must add up to '+inr(b.totalAmount)+'.', true); return; } var rentCash=Math.min(cash,b.rentAmount); payment.rentCash=rentCash; payment.rentUPI=b.rentAmount-rentCash; payment.depositCash=cash-rentCash; payment.depositUPI=b.depositAmount-(cash-rentCash); }
+    flash('Taking payment…');
+    return call('confirmBooking',[b.bookingId, vehicleId, payment, A.operator, A.token]).then(function(res){ closeModal(); var msg=b.riderName+' confirmed on '+(res.vehicleLabel||vehicleId)+' · '+inr(b.totalAmount)+' collected'; if(res.emailSent) msg+=' · email sent'; flash(msg); silentRefresh(); })
+      .catch(function(e){ flash(errMsg(e), true); });
+  }
+
+  // ── Return ──
+  function openReturn(bookingId){
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(!b){ flash('Booking not found — refreshing.', true); silentRefresh(); return; }
+    window._returnCtx={ b:b };
+    var body='<div style="display:flex;gap:11px;align-items:center;background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:13px;padding:13px 15px;margin-bottom:16px;"><span style="font-size:18px;">↩️</span><div style="font-size:13.5px;color:var(--txt-2);">Returning <b>'+esc(b.vehicleLabel||'—')+'</b> · due '+esc(b.checkOut)+'. Late fees (if any) are calculated automatically.</div></div>'
+      +'<label class="field-label">Damage / cleaning deduction (₹)</label><input id="rt-damage" class="field" type="number" min="0" placeholder="0">'
+      +'<label class="field-label" style="margin-top:16px;">Condition notes</label><textarea id="rt-note" class="field" rows="2" placeholder="Scratches, battery level, helmet returned…" style="resize:none;"></textarea>'
+      +'<div class="summary" style="background:var(--pine-tint);border-color:var(--pine-line);"><div class="sr"><span style="color:var(--muted);">Deposit held</span><span style="font-weight:600;">'+inr(b.depositAmount)+'</span></div><div class="sr"><span style="color:var(--muted);">Damage / cleaning</span><span id="rt-dmg-lbl" style="font-weight:600;color:var(--terra);">− ₹0</span></div><div class="sr total"><span style="font-weight:600;">Refund before late fee</span><span class="amt" id="rt-refund" style="color:var(--pine);">'+inr(b.depositAmount)+'</span></div></div>';
+    var footer='<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="rt-submit">Settle &amp; refund</button>';
+    openModal('Process return', b.riderName+' · '+(b.vehicleLabel||'—')+' · '+b.bookingId, body, footer);
+    $('rt-damage').oninput=function(){ var dmg=Number(val('rt-damage'))||0; $('rt-dmg-lbl').textContent='− '+inr(dmg); $('rt-refund').textContent=inr(Math.max(0,b.depositAmount-dmg)); };
+  }
+  function submitReturn(){
+    var b=window._returnCtx.b, dmg=Number(val('rt-damage'))||0, note=val('rt-note');
+    var returnData={ actualReturn:new Date().toISOString(), refundMode:'same', operatorName:A.operator, notes:note, deductions: dmg>0?[{amount:dmg, reason:'Damage/cleaning'}]:[] };
+    flash('Processing return…');
+    return call('processReturn',[b.bookingId, returnData, A.token]).then(function(res){ closeModal(); var msg=b.riderName+' returned '+(b.vehicleLabel||'')+' · '+inr(res.refundAmount)+' refunded'; if(res.lateFee>0) msg+=' (late fee '+inr(res.lateFee)+')'; flash(msg); silentRefresh(); })
+      .catch(function(e){ flash(errMsg(e), true); });
+  }
+
+  // ── Cancel ──
+  function openCancel(bookingId){
+    var body='<p style="font-size:14px;color:var(--muted);margin:0 0 14px;">This cancels the booking and frees its scooter (if assigned). This cannot be undone.</p><label class="field-label">Reason (optional)</label><input id="cancel-reason" class="field" placeholder="e.g. guest no-show">';
+    openModal('Cancel booking', bookingId, body, '<button class="btn-ghost-lg" data-action="modal-close">Keep booking</button><button class="btn-lg danger" data-action="cancel-submit">Cancel booking</button>');
+    window._cancelId=bookingId;
+  }
+  function submitCancel(){ flash('Cancelling…'); return call('cancelBooking',[window._cancelId, val('cancel-reason')||'Cancelled', A.operator, A.token]).then(function(){ closeModal(); flash('Booking cancelled.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); }); }
+
+  // ── Handover ──
+  function openHandover(){
+    var mgrLabel=(C.settings&&C.settings.managerLabel)||(C.dashboard&&C.dashboard.managerLabel)||'Manager';
+    var cash=(C.drawers&&C.drawers.myBalance!=null)?C.drawers.myBalance:(C.dashboard?C.dashboard.accounting.cashInHand:0);
+    // Recipient = the manager pool, or a peer operator (never yourself, never a manager-role op).
+    var peers=(C.operators||[]).filter(function(o){ return o.name!==A.operator && o.role!=='Admin' && o.role!=='Manager' && o.active!==false; });
+    var opts='<option value="'+esc(mgrLabel)+'">'+esc(mgrLabel)+' (manager)</option>'+peers.map(function(o){ return '<option value="'+esc(o.name)+'">'+esc(o.name)+'</option>'; }).join('');
+    var body='<div style="background:var(--gold-tint);border:1px solid var(--gold);border-radius:12px;padding:11px 14px;font-size:13px;color:var(--gold-deep);margin-bottom:14px;">The cash stays in your drawer until the recipient <b>verifies</b> the transfer.</div>'
+      +'<label class="field-label">Amount to transfer (₹)</label><input id="ho-amt" class="field" type="number" placeholder="0" style="font-size:20px;font-family:var(--serif);">'
+      +'<div style="display:flex;gap:8px;margin-top:10px;"><button class="btn" data-action="ho-all" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-size:13px;font-weight:600;padding:8px 13px;border-radius:9px;">Whole drawer ('+inr(cash)+')</button></div>'
+      +'<label class="field-label" style="margin-top:16px;">Transfer to</label><select id="ho-mgr" class="field">'+opts+'</select>'
+      +'<label class="field-label" style="margin-top:16px;">Note (optional)</label><input id="ho-note" class="field" placeholder="Shift handover, etc.">';
+    openModal('Transfer cash','You are holding '+inr(cash), body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="ho-submit">Request transfer</button>');
+    window._hoCash=cash;
+  }
+  function submitHandover(){
+    var amt=Number(val('ho-amt'))||0;
+    if(amt<=0){ flash('Enter an amount.', true); return; }
+    if(!isMgr() && amt>window._hoCash+1){ flash('You only hold '+inr(window._hoCash)+'.', true); return; }
+    flash('Requesting transfer…');
+    return call('requestHandover',[amt, val('ho-note'), val('ho-mgr')||'Manager', A.token]).then(function(){ closeModal(); flash(inr(amt)+' transfer requested — waiting for the recipient to verify.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); });
+  }
+  function hoDecide(id, approve){
+    A.mutateEpoch++;
+    return call(approve?'approveHandover':'rejectHandover',[id, A.token]).then(function(){ flash(approve?'Handover verified — cash moved.':'Handover rejected.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); silentRefresh(); });
+  }
+  // ── Refund (debits the paying drawer; recorded immutably) ──
+  function openRefund(){
+    var body='<label class="field-label">Refund amount (₹)</label><input id="rf-amt" class="field" type="number" placeholder="0" style="font-size:18px;font-family:var(--serif);">'
+      +'<div style="margin:14px 0 8px;"><label class="field-label">Paid from</label><div style="display:flex;gap:9px;"><button class="seg on" data-action="rf-method" data-m="cash">Cash drawer</button><button class="seg" data-action="rf-method" data-m="upi">UPI</button></div></div>'
+      +'<label class="field-label" style="margin-top:14px;">Booking ID (optional)</label><input id="rf-booking" class="field" placeholder="e.g. 220626-1">'
+      +'<label class="field-label" style="margin-top:14px;">Reason / note</label><input id="rf-note" class="field" placeholder="Why is this refunded?">';
+    openModal('Record a refund', isMgr()?'From the manager drawer':'From your drawer', body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="rf-submit">Record refund</button>');
+    window._rfMethod='cash';
+  }
+  function rfMethod(m){ window._rfMethod=m; Array.prototype.forEach.call(document.querySelectorAll('[data-action="rf-method"]'), function(b){ b.classList.toggle('on', b.getAttribute('data-m')===m); }); }
+  function submitRefund(){
+    var amt=Number(val('rf-amt'))||0; if(amt<=0){ flash('Enter a refund amount.', true); return; }
+    flash('Recording refund…');
+    return call('recordRefund',[amt, window._rfMethod||'cash', val('rf-note'), val('rf-booking'), A.token]).then(function(){ closeModal(); flash(inr(amt)+' refund recorded.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); });
+  }
+  // ── Relieve to company (real outflow) ──
+  function openRelieve(){
+    var cash=(C.dashboard&&C.dashboard.accounting)?C.dashboard.accounting.cashInHand:0;
+    var body='<div style="background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:12px;padding:11px 14px;font-size:12.5px;color:var(--pine);margin-bottom:14px;">Cash given to the company leaves the desk for good — it lowers total cash on hand. Relieve everything and cash on hand becomes ₹0.</div>'
+      +'<label class="field-label">Amount to relieve (₹)</label><input id="rl-amt" class="field" type="number" placeholder="0" style="font-size:20px;font-family:var(--serif);">'
+      +'<div style="display:flex;gap:8px;margin-top:10px;"><button class="btn" data-action="rl-all" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-size:13px;font-weight:600;padding:8px 13px;border-radius:9px;">All cash ('+inr(cash)+')</button></div>'
+      +'<label class="field-label" style="margin-top:16px;">Note (optional)</label><input id="rl-note" class="field" placeholder="Remittance reference">';
+    openModal('Relieve to company','Cash on hand '+inr(cash), body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="rl-submit">Relieve</button>');
+    window._rlCash=cash;
+  }
+  function submitRelieve(){ var amt=Number(val('rl-amt'))||0; if(amt<=0){ flash('Enter an amount.', true); return; } if(amt>window._rlCash+1){ flash('Cannot exceed cash on hand.', true); return; } flash('Relieving…'); return call('recordRelieve',[amt, val('rl-note'), A.token]).then(function(){ closeModal(); flash(inr(amt)+' relieved to company.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); }); }
+  // ── Self-audit (verify/fail + what changed where) ──
+  function runAudit(){
+    flash('Running self-audit…');
+    return call('runSelfAudit',[A.token]).then(function(r){
+      var head=r.ok
+        ?'<div style="display:flex;align-items:center;gap:11px;"><span style="width:38px;height:38px;border-radius:11px;background:var(--pine-tint);color:var(--pine);display:flex;align-items:center;justify-content:center;font-size:18px;">✓</span><div><div style="font-weight:700;font-size:16px;color:var(--pine);">Books verified</div><div style="font-size:12.5px;color:var(--muted-2);">Everything reconciles · '+esc(r.checkedAt)+'</div></div></div>'
+        :'<div style="display:flex;align-items:center;gap:11px;"><span style="width:38px;height:38px;border-radius:11px;background:var(--terra-tint);color:var(--terra);display:flex;align-items:center;justify-content:center;font-size:18px;">!</span><div><div style="font-weight:700;font-size:16px;color:var(--terra);">Audit failed — '+r.issues.length+' issue'+(r.issues.length>1?'s':'')+'</div><div style="font-size:12.5px;color:var(--muted-2);">'+esc(r.checkedAt)+'</div></div></div>';
+      var sum='<div class="summary" style="margin-top:14px;"><div class="sr"><span style="color:var(--muted);">Cash on hand (books)</span><span style="font-weight:600;">'+inr(r.cashOnHand)+'</span></div><div class="sr"><span style="color:var(--muted);">Cash from ledger</span><span style="font-weight:600;">'+inr(r.ledgerCash)+'</span></div><div class="sr"><span style="color:var(--muted);">Σ drawers</span><span style="font-weight:600;">'+inr(r.drawerSum)+'</span></div><div class="sr total"><span style="font-weight:600;">Difference</span><span class="amt" style="color:'+(Math.abs(r.cashDelta)>1?'var(--terra)':'var(--pine)')+';">'+inr(r.cashDelta)+'</span></div></div>';
+      var iss=r.issues.length?'<div style="margin-top:14px;">'+r.issues.map(function(it){ return '<div style="border:1px solid var(--terra-tint);background:var(--terra-tint);border-radius:12px;padding:11px 13px;margin-bottom:8px;"><div style="font-weight:600;font-size:13px;color:var(--terra);">'+esc(it.where)+'</div><div style="font-size:12.5px;color:var(--txt-2);margin-top:2px;">'+esc(it.detail)+'</div></div>'; }).join('')+'</div>':'';
+      openModal('Self-audit','Independent integrity check of the books', head+sum+iss, '<button class="btn-lg" data-action="modal-close">Close</button>');
+    }).catch(function(e){ flash(errMsg(e), true); });
+  }
+  // ── Manager: add a past (backdated) booking ──
+  function openAddPastBooking(){
+    var opts='<option value="">Select…</option>'+(C.cottages||[]).map(function(c){ return '<option>'+esc(c.name)+'</option>'; }).join('');
+    var today=new Date(); var iso=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+    window._pbMethod='cash';
+    var body='<div style="background:var(--gold-tint);border:1px solid var(--gold);border-radius:12px;padding:11px 14px;font-size:12.5px;color:var(--gold-deep);margin-bottom:14px;">Historical entry. The money posts to <b>today\'s</b> ledger — the books only move forward, history can\'t be rewritten.</div>'
+      +'<div class="gf"><div class="full"><label class="field-label">Guest name *</label><input id="pb-name" class="field"></div>'
+      +'<div><label class="field-label">Mobile</label><input id="pb-mobile" class="field" type="tel"></div>'
+      +'<div><label class="field-label">Cottage</label><select id="pb-cottage" class="field">'+opts+'</select></div>'
+      +'<div><label class="field-label">Booked on (past date)</label><input id="pb-created" class="field" type="date" value="'+iso+'" max="'+iso+'"></div>'
+      +'<div><label class="field-label">Status</label><select id="pb-status" class="field"><option value="Returned">Returned (closed)</option><option value="Active">Active (still out)</option></select></div>'
+      +'<div><label class="field-label">Check-in</label><input id="pb-checkin" class="field" type="date" value="'+iso+'"></div>'
+      +'<div><label class="field-label">Check-out</label><input id="pb-checkout" class="field" type="date" value="'+iso+'"></div>'
+      +'<div class="full"><label class="field-label">Vehicle (label, optional)</label><input id="pb-vehicle" class="field" placeholder="e.g. EV-01" style="font-family:var(--mono);"></div></div>'
+      +'<div style="margin:16px 0 8px;"><label class="field-label">How was it paid?</label><div style="display:flex;gap:9px;"><button class="seg on" data-action="pb-method" data-m="cash">Cash</button><button class="seg" data-action="pb-method" data-m="upi">UPI</button><button class="seg" data-action="pb-method" data-m="split">Split</button></div></div>'
+      +'<div id="pb-split" class="hidden"><div class="gf"><div><label class="field-label">Cash (₹)</label><input id="pb-cash" class="field" type="number" placeholder="0"></div><div><label class="field-label">UPI (₹)</label><input id="pb-upi" class="field" type="number" placeholder="0"></div></div></div>'
+      +'<div class="summary"><div class="sr"><span style="color:var(--muted);">Estimate</span><span id="pb-est">—</span></div></div>';
+    openModal('Add past booking','Manager · historical record', body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="pb-submit">Add record</button>');
+    function recalc(){ var p=window.Sthira.pricePreview(window.Sthira.daysInclusive($('pb-checkin').value,$('pb-checkout').value),(C.settings&&C.settings.dayRate)||300,(C.settings&&C.settings.depositPerWeek)||2000); window._pbPrice=p; $('pb-est').textContent=p.days+'d · '+inr(p.rent)+' rent + '+inr(p.deposit)+' deposit = '+inr(p.rent+p.deposit); }
+    $('pb-checkin').onchange=function(){ if($('pb-checkout').value<$('pb-checkin').value) $('pb-checkout').value=$('pb-checkin').value; recalc(); };
+    $('pb-checkout').onchange=recalc; recalc();
+  }
+  function pbMethod(m){ window._pbMethod=m; Array.prototype.forEach.call(document.querySelectorAll('[data-action="pb-method"]'), function(b){ b.classList.toggle('on', b.getAttribute('data-m')===m); }); $('pb-split').classList.toggle('hidden', m!=='split'); }
+  function submitAddPastBooking(){
+    var name=val('pb-name'); if(!name){ flash('Enter the guest name.', true); return; }
+    var p=window._pbPrice||{rent:0,deposit:0}, rent=p.rent, dep=p.deposit, total=rent+dep, m=window._pbMethod;
+    var rentCash=0,rentUPI=0,depCash=0,depUPI=0;
+    if(m==='cash'){ rentCash=rent; depCash=dep; }
+    else if(m==='upi'){ rentUPI=rent; depUPI=dep; }
+    else { var cash=Number(val('pb-cash'))||0, upi=Number(val('pb-upi'))||0; if(Math.round(cash+upi)!==Math.round(total)){ flash('Split must add up to '+inr(total)+'.', true); return; } rentCash=Math.min(cash,rent); rentUPI=rent-rentCash; depCash=cash-rentCash; depUPI=dep-depCash; }
+    var data={ riderName:name, mobile:val('pb-mobile'), cottageName:val('pb-cottage'), vehicleLabel:val('pb-vehicle'), checkIn:val('pb-checkin'), checkOut:val('pb-checkout'), createdAt:val('pb-created'), status:val('pb-status'), rentAmount:rent, depositAmount:dep, rentCash:rentCash, rentUPI:rentUPI, depositCash:depCash, depositUPI:depUPI };
+    flash('Adding past booking…');
+    return call('createBackdatedBooking',[data, A.token]).then(function(res){ closeModal(); flash('Past booking '+res.bookingId+' added.'); A.bTab='all'; gotoView('bookings'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); });
+  }
+  function openDeleteBooking(id){
+    window._delId=id;
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===id;})[0], nm=b?b.riderName:'';
+    var body='<p style="font-size:14px;color:var(--muted);margin:0;">This marks the booking as <b>Record deleted</b> and removes it from the active lists. The money already recorded <b>stays in the ledger</b> — bank records are never erased.</p>';
+    openModal('Delete booking', id+(nm?' · '+nm:''), body, '<button class="btn-ghost-lg" data-action="modal-close">Keep</button><button class="btn-lg danger" data-action="del-submit">Delete record</button>');
+  }
+  function submitDeleteBooking(){ flash('Deleting…'); return call('deleteBooking',[window._delId, A.token]).then(function(res){ closeModal(); flash('Record deleted · '+(res.riderName||'')); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); }); }
+  function settingsSetEmail(id){ var em=val('op-email-'+id); flash('Saving…'); return call('setOperatorEmail',[id, em, A.token]).then(function(){ flash('Email saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+  function savePowers(){ var u={ allowPastBookings:$('set-allow-past').checked?'yes':'no', allowDeleteBookings:$('set-allow-delete').checked?'yes':'no' }; C.settings.allowPastBookings=u.allowPastBookings; C.settings.allowDeleteBookings=u.allowDeleteBookings; flash('Saving…'); return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Manager powers saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+
+  // ── Add vehicle ──
+  function openAddVehicle(){
+    var body='<div class="gf"><div class="full"><label class="field-label">Scooter number / label *</label><input id="av-label" class="field" placeholder="e.g. EV-01" style="font-family:var(--mono);"></div><div><label class="field-label">Type</label><select id="av-type" class="field"><option value="Rental">Rental (for guests)</option><option value="Staff">Staff (internal)</option></select></div><div><label class="field-label">Notes</label><input id="av-notes" class="field" placeholder="Optional"></div></div>';
+    openModal('Add vehicle','Register a new scooter to the fleet', body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="av-submit">Add to fleet</button>');
+  }
+  function submitAddVehicle(){
+    var label=val('av-label'); if(!label){ flash('Enter a scooter number.', true); return; }
+    if((C.vehicles||[]).some(function(v){ return String(v.label||'').trim().toLowerCase()===label.toLowerCase(); })){ flash('A scooter “'+label+'” already exists.', true); return; }
+    var type=val('av-type'), notes=val('av-notes');
+    flash('Adding to fleet…');
+    return call('addVehicle',[label, type, notes, A.token]).then(function(){ closeModal(); flash(label+' added to the fleet.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); });
+  }
+
+  // ════════ BOOKING DETAILS (overlay — instant, from cache) ════════
+  function detailRow(label, value){ if(value===''||value==null) return ''; return '<div style="display:flex;justify-content:space-between;gap:18px;padding:9px 0;border-top:1px solid var(--line);"><span style="color:var(--muted-2);font-size:13px;">'+esc(label)+'</span><span style="font-weight:600;font-size:13.5px;text-align:right;max-width:62%;word-break:break-word;">'+esc(value)+'</span></div>'; }
+  function detailSection(title, rows){ var inner=rows.join(''); if(!inner) return ''; return '<div style="margin-bottom:16px;"><div style="font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);">'+esc(title)+'</div>'+inner+'</div>'; }
+  function openBookingDetails(bookingId){
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(!b){ flash('Booking not found — refreshing.', true); silentRefresh(); return; }
+    var sm=statusMeta(b.status);
+    var hasCash=(b.rentCash+b.depositCash)>0, hasUPI=(b.rentUPI+b.depositUPI)>0;
+    var payMode=(hasCash&&hasUPI)?'Cash + UPI':(hasUPI?'UPI':(hasCash?'Cash':''));
+    var body='<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;"><div class="av" style="width:46px;height:46px;font-size:16px;">'+esc(initials(b.riderName))+'</div><div style="flex:1;min-width:0;"><div style="font-weight:700;font-size:17px;">'+esc(b.riderName)+'</div><div style="font-size:12.5px;color:var(--muted-2);font-family:var(--mono);">'+esc(b.bookingId)+'</div></div><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';">'+sm.label+'</span></div>'
+      +detailSection('Guest',[ detailRow('Mobile', b.mobile), detailRow('Alt. mobile', b.altMobile), detailRow('Email', b.email), detailRow('Driving licence', b.dlNumber), detailRow('Cottage / stay', b.cottageName) ])
+      +detailSection('Rental',[ detailRow('Scooter', b.vehicleLabel), detailRow('Check-in', b.checkIn), detailRow('Return by', b.checkOut), detailRow('Duration', b.days?b.days+' day(s)':''), detailRow('Booked on', b.createdAt) ])
+      +detailSection('Money',[ detailRow('Rent', inr(b.rentAmount)), detailRow('Deposit (held)', inr(b.depositAmount)), detailRow('Total', inr(b.totalAmount)), detailRow('Paid by', (b.status!=='Pending'?payMode:'')), detailRow('Late fee', b.lateFee?inr(b.lateFee):''), detailRow('Deductions', b.deductionTotal?inr(b.deductionTotal):''), detailRow('Refunded', b.refundTotal?inr(b.refundTotal):'') ])
+      +detailSection('Handled by',[ detailRow('Booked by', b.operatorBooked), detailRow('Terms accepted', b.consentAt), detailRow('Returned by', b.operatorReturned), detailRow('Returned at', b.actualReturn), detailRow('Notes', b.returnNotes) ]);
+    var idA=esc(b.bookingId);
+    if(b.status==='Deleted') body='<div style="background:var(--terra-tint);border:1px solid var(--terra);border-radius:12px;padding:11px 14px;font-size:13px;color:var(--terra);font-weight:600;margin-bottom:14px;">'+esc(b.returnNotes||('Record deleted · '+b.riderName))+'. The money remains in the ledger.</div>'+body;
+    var footer='<button class="btn-ghost-lg" data-action="modal-close">Close</button>';
+    if(b.status==='Pending'){ footer+='<button class="btn-ghost-lg" data-action="cn-from-details" data-id="'+idA+'" style="color:var(--terra);">Cancel</button><button class="btn-lg" data-action="cf-from-details" data-id="'+idA+'">Confirm booking</button>'; }
+    else if(b.status==='Active'){ footer+='<button class="btn-ghost-lg" data-action="cn-from-details" data-id="'+idA+'" style="color:var(--terra);">Cancel</button><button class="btn-lg" data-action="rt-from-details" data-id="'+idA+'">Process return</button>'; }
+    if(isMgr() && b.status!=='Deleted'){ footer+='<button class="btn-ghost-lg" data-action="bk-delete" data-id="'+idA+'" style="color:var(--terra);">Delete</button>'; }
+    openModal('Booking details', b.cottageName||b.riderName, body, footer);
+  }
+  function openOccupantBooking(vehicleId){
+    var b=(C.bookings||[]).filter(function(x){return x.vehicleId===vehicleId && x.status==='Active';})[0];
+    if(b) openBookingDetails(b.bookingId); else flash('No active booking found for this scooter.');
+  }
+
+  // ════════ SETTINGS SAVES (optimistic — instant feedback) ════════
+  function savePricing(){
+    var u={ dayRate:val('set-rate'), depositPerWeek:val('set-deposit'), lateFeePerHour:val('set-late'), graceMinutes:val('set-grace'), rentalStartTime:val('set-start')||'09:00', rentalEndTime:val('set-end')||'21:00' };
+    Object.keys(u).forEach(function(k){ C.settings[k]=u[k]; }); flash('Saving…');
+    return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Pricing & timings saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
+  function saveAccess(){
+    var u={ managerLabel:val('set-manager') }; C.settings.managerLabel=u.managerLabel; flash('Saving…');
+    return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
+  function saveEmail(){
+    var u={ emailEnabled:$('set-email-on').checked?'yes':'no', emailFromName:val('set-email-from'), emailReplyTo:val('set-email-reply') };
+    Object.keys(u).forEach(function(k){ C.settings[k]=u[k]; }); flash('Saving…');
+    return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Email settings saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
+  function sendTest(){ var to=val('test-email'); if(!to||to.indexOf('@')<0){ flash('Enter a valid email.', true); return; } flash('Sending test…'); return call('sendTestEmail',[to, A.token]).then(function(){ flash('Test email sent to '+to+'.'); }).catch(function(e){ flash(errMsg(e), true); }); }
+
+  function mapUseDrive(){
+    var body='<p style="font-size:14px;color:var(--muted);margin:0 0 12px;">Paste a Google Drive share link (or file ID) of your map image. Make sure it\'s an image you can open.</p><label class="field-label">Drive link or file ID</label><input id="md-link" class="field" placeholder="https://drive.google.com/file/d/…">';
+    openModal('Use a Drive image','The map shows on the guest form and embeds in emails', body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="md-submit">Use this image</button>');
+  }
+  function submitMapDrive(){ var link=val('md-link'); if(!link){ flash('Paste a Drive link or file ID.', true); return; } flash('Setting map…'); return call('useMapFromDrive',[link, A.token]).then(function(){ closeModal(); flash('Map image set ✓'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); }); }
+
+  // ════════ OPTIMISTIC LIGHT MUTATIONS ════════
+  function vehToggle(id, status){
+    A.mutateEpoch++;
+    (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===id) v.status=status; }); renderFleet(); flash('Scooter updated.');
+    call('setVehicleStatus',[id, status, A.token]).then(function(){ silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); silentRefresh(); });
+  }
+  function vehDelete(id){
+    A.mutateEpoch++;
+    C.vehicles=(C.vehicles||[]).filter(function(v){ return v.vehicleId!==id; }); renderFleet(); flash('Scooter removed.');
+    call('deleteVehicle',[id, A.token]).then(function(){ silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); silentRefresh(); });
+  }
+  // Edit a vehicle (label / type / status / notes) — also "allocate to staff".
+  function openEditVehicle(id){
+    var v=(C.vehicles||[]).filter(function(x){return x.vehicleId===id;})[0];
+    if(!v){ flash('Vehicle not found — refreshing.', true); silentRefresh(); return; }
+    if(v.status==='Out'){ flash('This scooter is on rent — return it first to edit.', true); return; }
+    window._veditId=id;
+    var typeOpts=['Rental','Staff'].map(function(t){return '<option'+(v.type===t?' selected':'')+'>'+t+'</option>';}).join('');
+    var statOpts=['Available','Maintenance','Staff'].map(function(s){return '<option'+(v.status===s?' selected':'')+'>'+s+'</option>';}).join('');
+    var body='<div class="gf"><div class="full"><label class="field-label">Scooter number / label</label><input id="ve-label" class="field" value="'+esc(v.label)+'" style="font-family:var(--mono);"></div>'
+      +'<div><label class="field-label">Type</label><select id="ve-type" class="field">'+typeOpts+'</select></div>'
+      +'<div><label class="field-label">Status</label><select id="ve-status" class="field">'+statOpts+'</select></div>'
+      +'<div class="full"><label class="field-label">Notes</label><input id="ve-notes" class="field" value="'+esc(v.notes||'')+'" placeholder="Optional"></div></div>'
+      +'<div style="font-size:12.5px;color:var(--muted-2);margin-top:10px;">Set type <b>Staff</b> (and status Staff) to allocate this scooter for internal use — it won\'t be offered to guests.</div>';
+    openModal('Edit vehicle', v.label, body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="ve-submit">Save changes</button>');
+  }
+  function submitEditVehicle(){
+    var id=window._veditId, label=val('ve-label'); if(!label){ flash('Enter a scooter number.', true); return; }
+    var type=val('ve-type'), status=val('ve-status'), notes=val('ve-notes');
+    if((C.vehicles||[]).some(function(v){ return v.vehicleId!==id && String(v.label||'').trim().toLowerCase()===label.toLowerCase(); })){ flash('Another scooter “'+label+'” already exists.', true); return; }
+    flash('Saving…');
+    return call('updateVehicle',[id, { label:label, type:type, status:status, notes:notes }, A.token]).then(function(){ closeModal(); flash('Vehicle updated.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); });
+  }
+  function settingsAddOperator(){
+    var nm=val('op-newname'), pin=val('op-newpin').replace(/\D/g,'');
+    if(!nm){ flash('Enter the operator name.', true); return; }
+    if(pin.length!==6){ flash('Set a 6-digit PIN for the operator.', true); return; }
+    A.mutateEpoch++;
+    C.operators=(C.operators||[]).concat([{ operatorId:'tmp', name:nm, role:'Operator', active:true }]); renderSettings(); flash('Saving…');
+    return call('addOperator',[nm, pin, 'Operator', A.token]).then(function(){ flash(nm+' added.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
+  function settingsSetPin(id){ var pin=val('op-pin-'+id).replace(/\D/g,''); if(pin.length!==6){ flash('PIN must be 6 digits.', true); return; } var inp=$('op-pin-'+id); if(inp) inp.value=''; flash('Saving…'); return call('setOperatorPin',[id, pin, A.token]).then(function(){ flash('PIN updated.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+  function settingsRemoveOperator(id){ C.operators=(C.operators||[]).filter(function(o){ return o.operatorId!==id; }); renderSettings(); flash('Removing…'); return call('deactivateOperator',[id, A.token]).then(function(){ flash('Operator removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+  function settingsAddCottage(){ var nm=val('cot-newname'); if(!nm) return; C.cottages=(C.cottages||[]).concat([{ cottageId:'tmp', name:nm, active:true }]); renderSettings(); flash('Saving…'); return call('addCottage',[nm, A.token]).then(function(){ flash(nm+' added.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+  function settingsRemoveCottage(id){ C.cottages=(C.cottages||[]).filter(function(c){ return c.cottageId!==id; }); renderSettings(); flash('Removing…'); return call('deactivateCottage',[id, A.token]).then(function(){ flash('Cottage removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+
+  function copyLink(){ var el=$('guest-link'); if(!el) return; el.select(); try{ document.execCommand('copy'); flash('Link copied.'); }catch(e){ flash('Select and copy the link.'); } }
+  function openSheet(){ flash('Opening spreadsheet…'); call('getSpreadsheetUrl',[A.token]).then(function(u){ if(u) window.open(u,'_blank'); else flash('Spreadsheet URL unavailable.', true); }).catch(function(e){ flash(errMsg(e), true); }); }
+  function doLogout(){ A.authGen++; var tk=A.token; A.token=null; C=null; clearInterval(refreshTimer); clearSession(); call('adminLogout',[tk]).catch(function(){}); flash('Locked.'); showLogin(); }
+
+  // ════════ DELEGATED CLICKS ════════
+  function onDelegateClick(e){
+    var t=e.target.closest('[data-action]'); if(!t) return;
+    var act=t.getAttribute('data-action'), id=t.getAttribute('data-id');
+    switch(act){
+      case 'modal-bg': closeModal(); break;
+      case 'modal-stop': e.stopPropagation(); break;
+      case 'modal-close': closeModal(); break;
+      case 'goto': gotoView(t.getAttribute('data-view')); break;
+      case 'btab': A.bTab=t.getAttribute('data-tab'); A.search=''; renderBookings(); break;
+      case 'period': A.period=t.getAttribute('data-p'); renderReports(); break;
+      case 'settab': A.setTab=t.getAttribute('data-t'); renderSettings(); break;
+      case 'confirm': openConfirm(id); break;
+      case 'return': openReturn(id); break;
+      case 'cancel': openCancel(id); break;
+      case 'bk-details': openBookingDetails(id); break;
+      case 'cf-from-details': closeModal(); openConfirm(id); break;
+      case 'rt-from-details': closeModal(); openReturn(id); break;
+      case 'cn-from-details': closeModal(); openCancel(id); break;
+      case 'veh-occupant': openOccupantBooking(id); break;
+      case 'cancel-submit': withBtn(t, submitCancel()); break;
+      case 'handover': openHandover(); break;
+      case 'ho-all': $('ho-amt').value=window._hoCash; break;
+      case 'ho-submit': withBtn(t, submitHandover()); break;
+      case 'add-vehicle': openAddVehicle(); break;
+      case 'av-submit': withBtn(t, submitAddVehicle()); break;
+      case 'veh-toggle': vehToggle(id, t.getAttribute('data-status')); break;
+      case 'veh-edit': openEditVehicle(id); break;
+      case 've-submit': withBtn(t, submitEditVehicle()); break;
+      case 'veh-delete': vehDelete(id); break;
+      case 'ho-verify': withBtn(t, hoDecide(id, true)); break;
+      case 'ho-reject': withBtn(t, hoDecide(id, false)); break;
+      case 'led-period': A.ledgerPeriod=t.getAttribute('data-p'); A.ledgerFilterOp=''; renderMoney(); break;
+      case 'led-more': fetchLedger(false); break;
+      case 'led-operator': A.ledgerFilterOp=t.getAttribute('data-op'); renderMoney(); break;
+      case 'led-clearfilter': A.ledgerFilterOp=''; renderMoney(); break;
+      case 'refund': openRefund(); break;
+      case 'rf-method': rfMethod(t.getAttribute('data-m')); break;
+      case 'rf-submit': withBtn(t, submitRefund()); break;
+      case 'relieve': openRelieve(); break;
+      case 'rl-all': $('rl-amt').value=window._rlCash; break;
+      case 'rl-submit': withBtn(t, submitRelieve()); break;
+      case 'run-audit': withBtn(t, runAudit()); break;
+      case 'money-drill': openMoneyDrill(t.getAttribute('data-drill')); break;
+      case 'add-past-booking': openAddPastBooking(); break;
+      case 'pb-method': pbMethod(t.getAttribute('data-m')); break;
+      case 'pb-submit': withBtn(t, submitAddPastBooking()); break;
+      case 'bk-delete': openDeleteBooking(id); break;
+      case 'del-submit': withBtn(t, submitDeleteBooking()); break;
+      case 'save-reports': withBtn(t, saveReports()); break;
+      case 'email-report': withBtn(t, emailReportNow()); break;
+      case 'export-csv': exportCSV(); break;
+      case 'op-setemail': withBtn(t, settingsSetEmail(id)); break;
+      case 'save-powers': withBtn(t, savePowers()); break;
+      case 'nb-submit': withBtn(t, submitNewBooking()); break;
+      case 'cf-method': cfMethod(t.getAttribute('data-m')); break;
+      case 'cf-submit': withBtn(t, submitConfirm()); break;
+      case 'rt-submit': withBtn(t, submitReturn()); break;
+      case 'save-pricing': withBtn(t, savePricing()); break;
+      case 'save-access': withBtn(t, saveAccess()); break;
+      case 'save-email': withBtn(t, saveEmail()); break;
+      case 'send-test': withBtn(t, sendTest()); break;
+      case 'map-computer': $('map-file').click(); break;
+      case 'map-drive': mapUseDrive(); break;
+      case 'md-submit': withBtn(t, submitMapDrive()); break;
+      case 'op-add': settingsAddOperator(); break;
+      case 'op-setpin': withBtn(t, settingsSetPin(id)); break;
+      case 'op-remove': settingsRemoveOperator(id); break;
+      case 'cot-add': settingsAddCottage(); break;
+      case 'cot-remove': settingsRemoveCottage(id); break;
+      case 'copy-link': copyLink(); break;
+      case 'open-link': window.open((C&&C.webAppUrl||window.WEB_APP_URL||'')+(((C&&C.webAppUrl||window.WEB_APP_URL||'').indexOf('?')>=0)?'&':'?')+'mode=rider','_blank'); break;
+      case 'open-sheet': openSheet(); break;
+      case 'logout': doLogout(); break;
+      case 'alert-go': if(_alertActions[+t.getAttribute('data-i')]){ closeModal(); _alertActions[+t.getAttribute('data-i')].go(); } break;
+      case 'alert-ov': if(_alertActions[+t.getAttribute('data-i')]) _alertActions[+t.getAttribute('data-i')].go(); break;
+    }
+  }
+
+  // ════════ GO ════════
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>

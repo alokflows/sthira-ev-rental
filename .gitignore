@@ -1,0 +1,17 @@
+# Account-specific clasp config (holds the scriptId). Copy .clasp.json.example → .clasp.json.
+.clasp.json
+
+# Backups / archives / logs
+*.bak
+*.zip
+*.log
+
+# Node (clasp tooling)
+node_modules/
+
+# Design working files — reference only, not part of the product
+_design/
+
+# OS cruft
+.DS_Store
+Thumbs.db

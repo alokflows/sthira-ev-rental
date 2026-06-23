@@ -1,0 +1,31 @@
+<script>
+// ── Shared rental math (ONE place) ───────────────────────────────────────────
+// Included by BOTH the rider form and the admin desk so the day/price rule lives
+// in a single file. The SERVER (daysInclusive + createPendingBooking in the .gs
+// engine) is the real authority that bills the guest; this only powers the instant
+// on-screen preview. Fix the rule here → both screens update together.
+window.Sthira = window.Sthira || {};
+
+// A day = a calendar day held (9am–9pm). Same day = 1; returning a later date adds
+// a day per date crossed. ci/co are 'YYYY-MM-DD'.
+window.Sthira.daysInclusive = function (ci, co) {
+  if (!ci || !co) return 1;
+  var d = Math.round((new Date(co) - new Date(ci)) / 86400000);
+  return d >= 0 ? d + 1 : 1;
+};
+
+window.Sthira.pricePreview = function (days, dayRate, depositPerWeek) {
+  days = Math.max(1, days || 1);
+  var rent = (Number(dayRate) || 0) * days;
+  var deposit = (Number(depositPerWeek) || 0) * Math.ceil(days / 7);
+  return { days: days, rent: rent, deposit: deposit, total: rent + deposit };
+};
+
+// 24h "HH:MM" → friendly "9:00 AM".
+window.Sthira.to12h = function (hhmm) {
+  var m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || '');
+  if (!m) return hhmm || '';
+  var h = +m[1], ap = h >= 12 ? 'PM' : 'AM', h12 = ((h + 11) % 12) + 1;
+  return h12 + ':' + m[2] + ' ' + ap;
+};
+</script>

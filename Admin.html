@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sthira — Desk</title>
+  <script>(function(){try{if(localStorage.getItem('sthira_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
+  <?!= include('Styles'); ?>
+  <style>
+    /* ── Admin shell ── */
+    .shell{min-height:100vh;display:flex;background:var(--paper);}
+    @media(max-width:860px){.shell{flex-direction:column;}}
+    .sidebar{width:252px;flex:none;background:#22332C;color:#F4F0E8;padding:24px 16px;display:flex;flex-direction:column;height:100vh;position:sticky;top:0;overflow:hidden;transition:width .2s ease,padding .2s ease;}
+    .side-brand{display:flex;align-items:center;gap:12px;padding:6px 13px 18px;}
+    .side-brand .mark{width:40px;height:40px;border-radius:13px;background:rgba(255,255,255,.12);color:#A8D8BE;display:flex;align-items:center;justify-content:center;flex:none;}
+    .side-brand .bx{display:flex;flex-direction:column;justify-content:center;min-width:0;}
+    .side-brand .nm{font-family:var(--serif);font-size:21px;font-weight:600;line-height:1.1;letter-spacing:.3px;}
+    .side-sub{font-size:11.5px;color:rgba(245,240,232,.55);margin-top:3px;line-height:1;}
+    .nav-btn{display:flex;align-items:center;gap:13px;width:100%;text-align:left;padding:11px 13px;margin-bottom:4px;border-radius:13px;border:none;cursor:pointer;
+      font-size:14.5px;font-weight:600;background:transparent;color:rgba(245,240,232,.62);transition:background .15s,color .15s;}
+    .nav-btn:hover{color:#FCFAF4;background:rgba(255,255,255,.05);}
+    .nav-btn.active{background:rgba(255,255,255,.10);color:#FCFAF4;}
+    .nav-btn .badge{margin-left:auto;background:#C0673D;color:#fff;border-radius:999px;font-size:11px;font-weight:700;padding:1px 7px;}
+    .side-op{margin-top:auto;padding-top:18px;}
+    .side-op-card{display:flex;align-items:center;gap:11px;padding:11px;border-radius:14px;background:rgba(255,255,255,.06);cursor:pointer;}
+    .side-op-card .av{width:40px;height:40px;border-radius:13px;background:rgba(255,255,255,.14);color:#F4F0E8;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex:none;}
+    /* collapse toggle + collapsed state (matches design: 252px <-> 76px) */
+    .side-collapse{display:flex;align-items:center;gap:13px;width:100%;justify-content:flex-start;padding:9px 13px;margin-bottom:10px;border-radius:11px;border:none;cursor:pointer;background:transparent;color:rgba(245,240,232,.62);font-size:13px;font-weight:600;font-family:var(--ui);transition:background .15s,color .15s;}
+    .side-collapse:hover{color:#FCFAF4;background:rgba(255,255,255,.05);}
+    .side-collapse svg{flex:none;transition:transform .2s;}
+    .sidebar.collapsed{width:76px;padding:24px 14px;}
+    .sidebar.collapsed .side-brand{justify-content:center;padding:6px 0 18px;}
+    .sidebar.collapsed .side-brand>div:last-child{display:none;}
+    .sidebar.collapsed .side-collapse{justify-content:center;}
+    .sidebar.collapsed .side-collapse span{display:none;}
+    .sidebar.collapsed .side-collapse svg{transform:scaleX(-1);}
+    .sidebar.collapsed .nav-btn{justify-content:center;}
+    .sidebar.collapsed .nav-btn span{display:none;}
+    .sidebar.collapsed .side-op-card{justify-content:center;padding:8px;}
+    .sidebar.collapsed .side-op-card>div:last-child{display:none;}
+
+    .main{flex:1;display:flex;flex-direction:column;min-width:0;height:100vh;}
+    @media(max-width:860px){.main{height:auto;padding-bottom:78px;}}
+    .topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:22px 34px 18px;flex:none;position:sticky;top:0;z-index:20;
+      background:var(--topbar);backdrop-filter:blur(10px);border-bottom:1px solid var(--line-3);}
+    @media(max-width:860px){.topbar{padding:18px 16px 14px;position:static;}}
+    .topbar .day{font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;}
+    .topbar h1{font-family:var(--serif);font-weight:500;margin:2px 0 0;font-size:26px;line-height:1.05;}
+    .icon-btn{position:relative;width:42px;height:42px;border-radius:13px;border:1px solid var(--line-3);background:var(--card);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt-2);flex:none;}
+    .icon-btn .ct{position:absolute;top:-5px;right:-5px;min-width:19px;height:19px;padding:0 5px;border-radius:10px;background:var(--terra-2);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid var(--card);}
+    .scrollarea{padding:26px 34px 40px;overflow-y:auto;flex:1;}
+    @media(max-width:860px){.scrollarea{padding:20px 16px;}}
+    /* Centered + fluid: when the sidebar collapses, the freed width is shared evenly
+       instead of leaving a dead strip on the right. */
+    .view{max-width:1240px;width:100%;margin:0 auto;}
+    /* Settings tiles fill the row on wide screens (no half-empty page). */
+    .set-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px;align-items:start;}
+    /* Drawer + ledger (Money) */
+    .drawer-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;}
+    .drawer-card .nm{font-weight:600;font-size:14.5px;}
+    .led-row{display:flex;align-items:center;gap:12px;padding:12px 4px;border-top:1px solid var(--hair);}
+    .led-amt{font-family:var(--mono);font-weight:600;font-size:14px;white-space:nowrap;}
+    .led-credit{color:var(--pine-soft);} .led-debit{color:var(--terra);} .led-transfer{color:var(--gold-deep);}
+    /* Minimal fleet icon buttons */
+    .veh-ib{width:34px;height:34px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .12s,color .12s;flex:none;}
+    .veh-ib:hover{background:var(--surface-2);color:var(--ink);}
+    .veh-ib.danger{color:var(--terra);border-color:var(--terra-tint);}
+    .veh-ib.danger:hover{background:var(--terra-tint);}
+
+    /* nav-pill (top-bar primary) */
+    .btn-sm{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border-radius:13px;border:none;background:var(--pine);color:#fff;font-weight:600;font-size:14px;cursor:pointer;box-shadow:0 4px 14px rgba(47,93,80,.2);white-space:nowrap;}
+
+    /* stat / cards */
+    .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;}
+    @media(max-width:860px){.stat-grid{grid-template-columns:repeat(2,1fr);gap:12px;}}
+    .stat{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;}
+    .stat .lbl{font-size:12.5px;letter-spacing:.04em;color:var(--muted-2);font-weight:600;text-transform:uppercase;}
+    .stat .val{font-family:var(--serif);font-size:34px;font-weight:500;line-height:1;}
+    .stat .dot{width:9px;height:9px;border-radius:50%;}
+    .split{display:grid;grid-template-columns:1.35fr 1fr;gap:18px;margin-top:18px;}
+    @media(max-width:860px){.split{grid-template-columns:1fr;}}
+    .panel{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:22px;}
+    .panel h2{font-family:var(--serif);font-weight:500;font-size:19px;margin:0;}
+    .row-item{display:flex;align-items:center;gap:14px;padding:13px 4px;border-top:1px solid var(--hair);}
+    .av{width:40px;height:40px;border-radius:13px;background:var(--surface-2);color:var(--txt-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex:none;}
+    .cash-hero{background:linear-gradient(150deg,var(--pine),#1C3A31);color:#fff;border-radius:20px;padding:24px;}
+    .link-btn{background:none;border:none;color:var(--pine);font-weight:600;font-size:13px;cursor:pointer;padding:6px 8px;border-radius:8px;}
+
+    /* tabs / chips */
+    .chip{display:flex;align-items:center;gap:7px;padding:9px 16px;border-radius:11px;border:1px solid var(--line-3);background:var(--surface);color:var(--muted);cursor:pointer;font-size:13.5px;font-weight:600;}
+    .chip.on{background:#23332C;color:#fff;border-color:#23332C;}
+    .chip .cct{background:var(--surface-2);color:var(--muted-2);border-radius:999px;padding:1px 7px;font-size:11.5px;}
+    .chip.on .cct{background:rgba(255,255,255,.2);color:#fff;}
+
+    .seg{flex:1;padding:11px;border-radius:11px;border:1px solid var(--line-3);background:var(--surface);color:var(--muted);font-weight:600;font-size:14px;cursor:pointer;}
+    .seg.on{background:var(--pine);color:#fff;border-color:var(--pine);}
+
+    .statuspill{font-size:12px;font-weight:600;padding:4px 11px;border-radius:999px;white-space:nowrap;display:inline-block;}
+
+    /* modal */
+    .modal-overlay{position:fixed;inset:0;z-index:60;background:rgba(34,30,22,.5);display:flex;align-items:center;justify-content:center;}
+    @media(max-width:860px){.modal-overlay{align-items:flex-end;}}
+    .modal{width:560px;max-width:94vw;max-height:90vh;background:var(--surface);border-radius:22px;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(40,30,15,.32);}
+    @media(max-width:860px){.modal{width:100%;max-height:94vh;border-radius:24px 24px 0 0;}}
+    .modal-head{display:flex;align-items:flex-start;justify-content:space-between;padding:22px 24px 16px;border-bottom:1px solid var(--hair);flex:none;}
+    .modal-head .ttl{font-family:var(--serif);font-size:23px;font-weight:500;}
+    .modal-head .sub{font-size:13px;color:var(--muted-2);margin-top:1px;}
+    .modal-body{padding:20px 24px;overflow-y:auto;flex:1;}
+    .modal-foot{display:flex;gap:12px;padding:16px 24px 22px;border-top:1px solid var(--hair);flex:none;}
+    .x-btn{width:34px;height:34px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface);color:var(--muted-2);cursor:pointer;font-size:14px;flex:none;}
+    .btn-lg{flex:1;padding:13px;border-radius:13px;border:none;background:var(--pine);color:#fff;font-weight:600;font-size:14.5px;cursor:pointer;}
+    .btn-lg.danger{background:var(--terra-2);}
+    .btn-ghost-lg{flex:0 0 auto;padding:13px 20px;border-radius:13px;border:1px solid #DDD5C5;background:transparent;color:var(--muted);font-weight:600;font-size:14.5px;cursor:pointer;}
+    .summary{background:var(--card-2);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:18px;}
+    .summary .sr{display:flex;justify-content:space-between;font-size:14px;margin-bottom:7px;}
+    .summary .sr.total{font-size:15.5px;border-top:1px solid #E4DCCC;padding-top:9px;margin-bottom:0;}
+    .summary .sr.total .amt{font-family:var(--serif);font-size:19px;font-weight:600;}
+
+    /* gridforms */
+    .gf{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+    .gf .full{grid-column:1/-1;}
+    @media(max-width:560px){.gf{grid-template-columns:1fr;}}
+
+    /* login / wizard / operator screens */
+    .gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(120% 60% at 50% 0%, var(--paper-hi) 0%, var(--paper) 60%);}
+    .gate-card{width:100%;max-width:420px;background:var(--card);border:1px solid var(--line);border-radius:24px;padding:34px 30px;box-shadow:0 10px 40px rgba(60,50,30,.08);}
+    .gate-mark{width:54px;height:54px;border-radius:16px;background:var(--pine);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;}
+    /* two-panel PIN login */
+    .login-wrap{min-height:100vh;display:flex;}
+    @media(max-width:860px){.login-wrap{flex-direction:column;}}
+    .login-brand{background:linear-gradient(160deg,#2F5D50,#1A352C);color:#F4F0E8;padding:56px 48px;flex:0 0 44%;display:flex;flex-direction:column;justify-content:space-between;min-height:100vh;}
+    @media(max-width:860px){.login-brand{flex:none;min-height:auto;padding:40px 26px 30px;gap:26px;}}
+    .login-brand .lb-head{font-family:var(--serif);font-size:34px;font-weight:500;line-height:1.15;margin-top:10px;letter-spacing:.2px;}
+    .login-brand .lb-sub{font-size:15px;opacity:.82;line-height:1.6;margin:16px 0 0;max-width:340px;}
+    .login-brand .lb-foot{font-size:12.5px;opacity:.62;letter-spacing:.04em;}
+    .login-pad{flex:1;display:flex;align-items:center;justify-content:center;padding:40px;}
+    @media(max-width:860px){.login-pad{align-items:flex-start;padding:34px 24px 48px;}}
+    .pad-inner{width:100%;max-width:330px;text-align:center;}
+    .pin-dots{display:flex;gap:15px;justify-content:center;margin-top:26px;}
+    .pin-dots.err{animation:shShake .42s ease both;}
+    .pin-dots span{width:15px;height:15px;border-radius:50%;background:transparent;border:2px solid #CFC7B6;transition:all .15s;}
+    .pin-dots span.on{background:var(--pine);border-color:var(--pine);}
+    .pin-dots.err span.on{background:var(--terra-2);border-color:var(--terra-2);}
+    .pin-err{height:20px;margin-top:10px;font-size:13px;color:var(--terra-2);font-weight:600;}
+    .keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-top:14px;}
+    .key{height:62px;border-radius:18px;border:1px solid var(--line-3);background:var(--card);color:var(--ink);font-size:23px;font-weight:500;font-family:var(--serif);cursor:pointer;transition:background .12s,transform .08s;}
+    .key:active{transform:scale(.96);background:#F3EEE3;}
+    .key.aux{border:none;background:transparent;color:var(--faint);font-size:14px;font-weight:600;font-family:var(--ui);}
+    .key.back{font-size:21px;color:var(--muted);}
+    .bottomnav{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--card);border-top:1px solid var(--line-3);display:none;padding:8px 6px calc(8px + env(safe-area-inset-bottom));box-shadow:0 -4px 24px rgba(60,50,30,.06);}
+    @media(max-width:860px){.bottomnav{display:flex;}.sidebar{display:none;}}
+    .bn-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:4px 2px;font-size:10.5px;font-weight:600;color:var(--faint);}
+    .bn-btn.on{color:var(--pine);}
+    .empty{padding:42px 0;text-align:center;color:var(--faint);font-size:14.5px;}
+  </style>
+</head>
+<body>
+
+  <!-- ════════ LOADING ════════ -->
+  <div id="bootScreen" class="gate">
+    <div style="text-align:center;color:var(--muted);"><span class="spin" style="color:var(--pine);width:26px;height:26px;"></span><div id="bootMsg" style="margin-top:14px;font-size:14px;">Opening the desk…</div></div>
+  </div>
+
+  <!-- ════════ SETUP WIZARD ════════ -->
+  <div id="wizardScreen" class="gate hidden">
+    <div class="gate-card" style="max-width:480px;">
+      <div class="gate-mark"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18"/></svg></div>
+      <h1 class="serif" style="text-align:center;font-size:26px;margin:0 0 4px;">Welcome to Sthira</h1>
+      <p style="text-align:center;color:var(--muted);font-size:14px;margin:0 0 22px;">Let's set up your desk. You can change all of this later in Settings.</p>
+      <div class="gf">
+        <div class="full">
+          <label class="field-label">Your name (manager)<span class="req"> *</span></label>
+          <input id="wz-name" class="field" type="text" placeholder="e.g. Devi Sundaram" autocomplete="name">
+        </div>
+        <div class="full">
+          <label class="field-label">Set your 6-digit PIN<span class="req"> *</span></label>
+          <input id="wz-pin" class="field" type="text" inputmode="numeric" maxlength="6" placeholder="e.g. 482719" autocomplete="off">
+        </div>
+        <div>
+          <label class="field-label">Daily rate (₹)</label>
+          <input id="wz-rate" class="field" type="number" value="300">
+        </div>
+        <div>
+          <label class="field-label">Deposit / week (₹)</label>
+          <input id="wz-deposit" class="field" type="number" value="2000">
+        </div>
+        <div>
+          <label class="field-label">Late fee / hour (₹)</label>
+          <input id="wz-late" class="field" type="number" value="50">
+        </div>
+        <div>
+          <label class="field-label">Opening cash (₹)</label>
+          <input id="wz-cash" class="field" type="number" value="0">
+        </div>
+        <div class="full">
+          <label class="field-label">Manager label</label>
+          <input id="wz-manager" class="field" type="text" value="Manager">
+        </div>
+      </div>
+      <button id="wz-save" class="btn btn-primary" style="width:100%;margin-top:22px;justify-content:center;">Finish setup</button>
+    </div>
+  </div>
+
+  <!-- ════════ LOGIN (two-panel PIN keypad) ════════ -->
+  <div id="loginScreen" class="login-wrap hidden">
+    <div class="login-brand">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:42px;height:42px;border-radius:13px;background:rgba(255,255,255,.14);color:#A8D8BE;display:flex;align-items:center;justify-content:center;flex:none;"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18"/><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/></svg></div>
+        <span style="font-family:var(--serif);font-size:23px;font-weight:600;letter-spacing:.3px;">Sthira</span>
+      </div>
+      <div style="margin:auto 0;">
+        <div class="eyebrow" id="loginGreet" style="color:rgba(244,240,232,.7);">Welcome</div>
+        <div class="lb-head">A calm desk<br>for a mindful ride.</div>
+        <p class="lb-sub">Sign in with your PIN to manage today's scooter rentals. Quietly, simply, one guest at a time.</p>
+      </div>
+      <div class="lb-foot">Isha Yoga Center · Coimbatore</div>
+    </div>
+    <div class="login-pad">
+      <div class="pad-inner">
+        <div class="eyebrow">Travel Desk</div>
+        <h1 class="serif" style="font-size:27px;margin:8px 0 4px;">Welcome back</h1>
+        <p style="font-size:14px;color:var(--muted-2);margin:0;">Enter your 6-digit PIN to begin</p>
+        <div class="pin-dots" id="pinDots"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        <div class="pin-err" id="pinErr"></div>
+        <div class="keypad" id="keypad">
+          <button class="key" data-key="1">1</button><button class="key" data-key="2">2</button><button class="key" data-key="3">3</button>
+          <button class="key" data-key="4">4</button><button class="key" data-key="5">5</button><button class="key" data-key="6">6</button>
+          <button class="key" data-key="7">7</button><button class="key" data-key="8">8</button><button class="key" data-key="9">9</button>
+          <button class="key aux" data-key="clear">Clear</button><button class="key" data-key="0">0</button><button class="key aux back" data-key="back">⌫</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════ APP ════════ -->
+  <div id="appShell" class="shell hidden">
+    <aside class="sidebar" id="appSidebar">
+      <div class="side-brand">
+        <div class="mark"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18"/><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/></svg></div>
+        <div class="bx"><div class="nm">Sthira</div><div class="side-sub">Scooter Desk · Isha</div></div>
+      </div>
+      <button class="side-collapse" id="sideCollapse" title="Collapse sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M9 4.5v15"/></svg>
+        <span>Collapse</span>
+      </button>
+      <button class="nav-btn active" data-view="overview"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg><span>Overview</span></button>
+      <button class="nav-btn" data-view="bookings"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="2.5"/><path d="M3.5 9h17M8 3v3M16 3v3"/></svg><span>Bookings</span><span class="badge hidden" id="nav-pending"></span></button>
+      <button class="nav-btn" data-view="fleet"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="17.5" r="2.6"/><circle cx="18.5" cy="17.5" r="2.6"/><path d="M8 17.5h8M16 17.5l-3-9h-2.5"/></svg><span>Fleet</span></button>
+      <button class="nav-btn" data-view="money"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 9.5h18"/></svg><span>Money</span></button>
+      <button class="nav-btn" data-view="reports"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16h16"/><path d="M8 15l3.5-4 3 2.5L20 8"/></svg><span>Reports</span></button>
+      <button class="nav-btn" data-view="settings"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/></svg><span>Settings</span></button>
+      <div class="side-op">
+        <div class="side-op-card" id="side-op-card" title="Switch operator / lock">
+          <div class="av" id="side-op-initials">—</div>
+          <div style="min-width:0;"><div style="font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" id="side-op-name">Operator</div><div class="side-sub">On shift · tap to lock</div></div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div style="min-width:0;">
+          <div class="day" id="topDay">—</div>
+          <h1 id="topTitle">Overview</h1>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex:none;">
+          <span id="syncDot" class="hidden" title="Syncing…" style="display:inline-flex;align-items:center;color:var(--faint);"><span class="spin" style="width:14px;height:14px;"></span></span>
+          <button class="icon-btn" id="themeBtn" title="Light / dark"></button>
+          <button class="icon-btn" id="alertsBtn" title="Alerts">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8.5a6 6 0 0 0-12 0c0 6-2.5 7.5-2.5 7.5h17S18 14.5 18 8.5z"/><path d="M10.2 20a2 2 0 0 0 3.6 0"/></svg>
+            <span class="ct hidden" id="alertCt"></span>
+          </button>
+          <button class="btn-sm" id="newBookingBtn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span>New booking</span></button>
+        </div>
+      </header>
+
+      <main class="scrollarea">
+        <div id="view-overview" class="view"></div>
+        <div id="view-bookings" class="view hidden"></div>
+        <div id="view-fleet" class="view hidden"></div>
+        <div id="view-money" class="view hidden"></div>
+        <div id="view-reports" class="view hidden"></div>
+        <div id="view-settings" class="view hidden"></div>
+      </main>
+    </div>
+
+    <nav class="bottomnav">
+      <button class="bn-btn on" data-view="overview"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg><span>Home</span></button>
+      <button class="bn-btn" data-view="bookings"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="2.5"/><path d="M3.5 9h17M8 3v3M16 3v3"/></svg><span>Bookings</span></button>
+      <button class="bn-btn" data-view="fleet"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="17.5" r="2.6"/><circle cx="18.5" cy="17.5" r="2.6"/><path d="M8 17.5h8"/></svg><span>Fleet</span></button>
+      <button class="bn-btn" data-view="money"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 9.5h18"/></svg><span>Money</span></button>
+      <button class="bn-btn" data-view="settings"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/></svg><span>Settings</span></button>
+    </nav>
+  </div>
+
+  <!-- modal mount + toast -->
+  <div id="modalRoot"></div>
+  <div id="toast" class="toast"></div>
+
+  <script>
+    // Injected server-side: the deployed web-app URL (for the guest-form link).
+    window.WEB_APP_URL = "<?= getWebAppUrl() ?>";
+  </script>
+  <?!= include('SharedCalc'); ?>
+  <?!= include('AdminJS'); ?>
+</body>
+</html>

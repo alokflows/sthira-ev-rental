@@ -1,0 +1,14 @@
+# Design working files — reference only, never push to Apps Script
+_design/**
+**/*.dc.html
+support.js
+
+# Archives
+*.zip
+*.bak
+
+# Reference docs / assets
+*.pdf
+*.png
+*.md
+.thumbnail

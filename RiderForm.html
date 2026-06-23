@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sthira — Rental Agreement</title>
+  <!-- Installable as a PWA on the desk tablet: open ?mode=rider in Chrome → Add to Home screen -->
+  <link rel="manifest" href="?mode=manifest">
+  <meta name="theme-color" content="#2F5D50">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Sthira">
+  <script>(function(){try{if(localStorage.getItem('sthira_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
+  <?!= include('Styles'); ?>
+  <style>
+    .rider-bg{min-height:100vh;background:radial-gradient(120% 60% at 50% 0%, var(--paper-hi) 0%, var(--paper) 60%);}
+    .hero{text-align:center;padding:38px 0 24px;}
+    .brand{display:inline-flex;align-items:center;gap:10px;margin-bottom:22px;}
+    .brand .mark{width:38px;height:38px;border-radius:12px;background:var(--pine);color:#fff;display:flex;align-items:center;justify-content:center;}
+    .brand .name{font-family:var(--serif);font-size:20px;font-weight:600;letter-spacing:.3px;}
+    .how{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:30px;}
+    .how .step{background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md);padding:16px;text-align:center;}
+    .how .n{font-family:var(--serif);font-size:22px;color:var(--pine);}
+    .how .t{font-size:13px;color:var(--muted);margin-top:4px;font-weight:500;}
+    .point{display:flex;gap:11px;margin-top:14px;}
+    .point .bullet{flex:none;margin-top:7px;width:6px;height:6px;border-radius:50%;background:#9DB6A6;}
+    .point .txt{font-size:14.5px;line-height:1.6;color:var(--txt-2);}
+    .point .txt b{color:var(--pine);}
+    .row-zone{margin-top:16px;padding:14px 16px;background:var(--card-2);border:1px solid #ECE4D4;border-radius:13px;}
+    .row-zone .zone{font-size:13.5px;font-weight:700;color:var(--pine);margin-bottom:5px;}
+    .row-zone .rule{font-size:13.5px;line-height:1.55;color:var(--txt-2);}
+    .row-zone .sub{font-size:13px;line-height:1.5;color:#7C7565;margin-top:5px;display:flex;gap:8px;}
+    .row-zone .sub .b{color:#C0673D;}
+    .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+    .col-span{grid-column:1 / -1;}
+    .footer-bar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:rgba(251,248,241,.92);
+      backdrop-filter:blur(10px);border-top:1px solid #E3DCCD;box-shadow:0 -6px 28px rgba(60,50,30,.07);}
+    .footer-inner{max-width:760px;margin:0 auto;padding:14px 22px calc(14px + env(safe-area-inset-bottom));
+      display:flex;align-items:center;gap:18px;flex-wrap:wrap;}
+    .prog{flex:1;min-width:180px;}
+    .prog-track{height:7px;border-radius:4px;background:#E7DFCF;overflow:hidden;}
+    .prog-fill{height:100%;background:#9DB6A6;border-radius:4px;width:0;transition:width .3s ease,background .2s;}
+    .prog-fill.ready{background:var(--pine);}
+    /* Fixed viewport ("the TV"): the frame never moves or resizes — it clips, and only
+       the image inside is transformed (pinch/scroll to zoom, drag to pan). touch-action:none
+       so the gesture drives our handler instead of the browser scrolling/zooming the page. */
+    #mapFrame{overflow:hidden;max-height:72vh;touch-action:none;position:relative;}
+    #mapFrame.zoomed{cursor:grab;}
+    #mapImg{display:block;width:100%;height:auto;cursor:zoom-in;transform-origin:0 0;will-change:transform;}
+    .map-hint{font-size:12.5px;color:var(--muted-2);margin-top:12px;text-align:center;}
+    [data-theme="dark"] .footer-bar{background:rgba(20,19,16,.92);border-top-color:var(--line-3);}
+    [data-theme="dark"] .prog-track{background:var(--surface-2);}
+    [data-theme="dark"] .row-zone{border-color:var(--line);}
+    [data-theme="dark"] .how .step{background:var(--card);}
+    @media(max-width:560px){.hero h1{font-size:30px;}.grid-2{grid-template-columns:1fr;}}
+  </style>
+</head>
+<body>
+<button id="riderThemeBtn" title="Light / dark" style="position:fixed;top:14px;right:14px;z-index:50;width:42px;height:42px;border-radius:13px;border:1px solid var(--line-3);background:var(--card);color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer;"></button>
+<div class="rider-bg">
+
+  <!-- ════════ SUCCESS SCREEN ════════ -->
+  <div id="successScreen" class="hidden" style="max-width:560px;margin:0 auto;padding:80px 22px 60px;text-align:center;">
+    <div class="anim-pop" style="width:78px;height:78px;border-radius:50%;background:var(--pine);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 26px;">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+    </div>
+    <div class="eyebrow">Agreement accepted</div>
+    <h1 class="serif" style="font-size:32px;margin:8px 0 14px;line-height:1.15;">Thank you, <span id="okFirstName">rider</span>.<br>Your request is with the desk.</h1>
+    <p style="font-size:15px;color:var(--muted);line-height:1.6;margin:0 auto 28px;max-width:420px;">You've read and accepted all terms. Please proceed to the travel desk to verify your ID, collect your scooter and complete payment. A confirmation email follows once your scooter is allocated.</p>
+    <div class="card" style="text-align:left;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:14px;border-bottom:1px solid var(--hair);">
+        <span style="font-size:13px;color:var(--muted-2);">Reference</span>
+        <span class="mono" id="okRef" style="font-size:15px;font-weight:500;color:var(--pine);">—</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:11px 0;font-size:14px;"><span style="color:var(--muted-2);">Rider</span><span style="font-weight:600;" id="okRider">—</span></div>
+      <div style="display:flex;justify-content:space-between;padding:11px 0;font-size:14px;"><span style="color:var(--muted-2);">Cottage</span><span style="font-weight:600;" id="okCottage">—</span></div>
+      <div style="display:flex;justify-content:space-between;padding:11px 0;font-size:14px;"><span style="color:var(--muted-2);">Dates</span><span style="font-weight:600;" id="okDates">—</span></div>
+      <div style="display:flex;justify-content:space-between;padding:11px 0 0;font-size:14px;"><span style="color:var(--muted-2);">Accepted at</span><span style="font-weight:600;" id="okAcceptedAt">—</span></div>
+    </div>
+    <button id="resetBtn" class="btn btn-ghost" style="margin-top:26px;font-size:14px;">Start a new agreement</button>
+  </div>
+
+  <!-- ════════ FORM SCREEN ════════ -->
+  <div id="formScreen" class="wrap anim-fade" style="max-width:760px;padding-bottom:150px;">
+
+    <!-- HERO -->
+    <header class="hero">
+      <div class="brand">
+        <div class="mark"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18"/><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/></svg></div>
+        <span class="name">Sthira</span>
+      </div>
+      <div class="eyebrow">Isha Yoga Center · Coimbatore</div>
+      <h1 class="serif" style="font-size:29px;line-height:1.14;margin:10px 0 0;letter-spacing:.2px;">Electric Two-Wheeler Rental Agreement</h1>
+      <p style="font-size:14px;color:var(--muted);line-height:1.55;max-width:430px;margin:11px auto 0;">Read each term, accept all of them, then add your details — the desk handles the rest.</p>
+    </header>
+
+    <!-- HOW IT WORKS -->
+    <div class="how">
+      <div class="step"><div class="n">1</div><div class="t">Read every term</div></div>
+      <div class="step"><div class="n">2</div><div class="t">Accept each one</div></div>
+      <div class="step"><div class="n">3</div><div class="t">Share your details</div></div>
+    </div>
+
+    <!-- MAP (shown only if a map image is configured) -->
+    <section id="mapSection" class="card hidden" style="margin-bottom:30px;">
+      <div class="eyebrow-sm">Know your boundaries</div>
+      <h2 class="serif" style="font-size:23px;margin:5px 0 4px;">The permitted riding area</h2>
+      <p style="font-size:14px;color:var(--muted);line-height:1.6;margin:0 0 18px;">Stay within the Isha Yoga Center. The Malai Vasal Gate is the absolute limit — never cross it. Use the map below to orient yourself before you ride.</p>
+      <div id="mapFrame" style="border-radius:16px;border:1px solid var(--line-3);background:#fff;">
+        <img id="mapImg" src="" alt="Map of Isha Yoga Center" />
+      </div>
+      <div class="map-hint">Pinch or scroll to zoom · drag to explore · eases back on its own.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;">
+        <span class="pill pill-pine"><span class="dot"></span>Neelivasal — Adiyogi gate</span>
+        <span class="pill pill-pine"><span class="dot"></span>Up to Kalbhairava Temple</span>
+        <span class="pill pill-terra"><span class="dot"></span>Malai Vasal Gate — do not cross</span>
+        <span class="pill pill-gold"><span class="dot"></span>Welcome Point — restricted 7:30 AM–7:30 PM</span>
+      </div>
+    </section>
+
+    <!-- TERMS HEADING -->
+    <div style="text-align:center;margin:0 0 22px;">
+      <div class="eyebrow">The terms · <span id="termCount">7</span> sections</div>
+      <p style="font-size:13.5px;color:var(--muted-2);margin:6px 0 0;">Tap each card once you've read it to mark it accepted.</p>
+    </div>
+
+    <!-- TERM CARDS (rendered by RiderJS from getTermsSections) -->
+    <div id="termsContainer">
+      <div class="card" style="text-align:center;color:var(--muted);"><span class="spin" style="color:var(--pine);"></span><div style="margin-top:10px;font-size:14px;">Loading terms…</div></div>
+    </div>
+
+    <!-- UNDERTAKING -->
+    <section id="undertakingCard" class="card-soft" style="margin-top:16px;">
+      <div class="serif" style="font-style:italic;font-size:18px;line-height:1.55;color:var(--ink);">"I have read and understood the terms above. I accept full responsibility for the vehicle and my personal safety during the rental period."</div>
+      <button id="undertakingToggle" class="toggle" style="margin-top:18px;">
+        <span class="box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+        <span>I agree to this undertaking</span>
+      </button>
+    </section>
+
+    <!-- RIDER DETAILS -->
+    <section class="card" style="margin-top:30px;">
+      <div class="eyebrow-sm">Final step</div>
+      <h2 class="serif" style="font-size:24px;margin:5px 0 4px;">Your rider details</h2>
+      <p style="font-size:14px;color:var(--muted);margin:0 0 22px;">Bring the original of your ID and licence to the desk for verification.</p>
+      <div class="grid-2">
+        <div class="col-span">
+          <label class="field-label" for="f-name">Rider name<span class="req"> *</span></label>
+          <input id="f-name" class="field" type="text" placeholder="Full name" autocomplete="name">
+        </div>
+        <div>
+          <label class="field-label" for="f-license">Driving licence no.<span class="req"> *</span></label>
+          <input id="f-license" class="field" type="text" placeholder="DL number">
+        </div>
+        <div>
+          <label class="field-label" for="f-cottage">Cottage / accommodation<span class="req"> *</span></label>
+          <select id="f-cottage" class="field"><option value="">Loading…</option></select>
+        </div>
+        <div>
+          <label class="field-label" for="f-mobile">Mobile no.<span class="req"> *</span></label>
+          <input id="f-mobile" class="field" type="tel" inputmode="numeric" placeholder="+91 98765 43210" autocomplete="tel">
+        </div>
+        <div>
+          <label class="field-label" for="f-altMobile">Alternate mobile</label>
+          <input id="f-altMobile" class="field" type="tel" inputmode="numeric" placeholder="Optional">
+        </div>
+        <div class="col-span">
+          <label class="field-label" for="f-email">Email <span style="color:var(--muted-2);font-weight:500;">— optional</span></label>
+          <input id="f-email" class="field" type="email" placeholder="Add it to receive your confirmation, guidelines &amp; map" autocomplete="email">
+        </div>
+        <div class="col-span" id="rentalsWindowNote" style="font-size:13px;color:var(--txt-2);background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:11px;padding:11px 14px;"></div>
+        <div>
+          <label class="field-label" for="f-checkin">Check-in<span class="req"> *</span></label>
+          <input id="f-checkin" class="field" type="date">
+        </div>
+        <div>
+          <label class="field-label" for="f-checkout">Check-out<span class="req"> *</span></label>
+          <input id="f-checkout" class="field" type="date">
+        </div>
+      </div>
+      <!-- live price preview -->
+      <div id="pricePreview" class="hidden" style="margin-top:18px;padding:14px 16px;background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:13px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <span style="font-size:13.5px;color:var(--txt-2);"><span id="priceDays">1</span>-day estimate · pay at the desk</span>
+        <span class="mono" style="font-size:14px;color:var(--pine);font-weight:500;"><span id="priceRent">—</span> rent + <span id="priceDep">—</span> deposit</span>
+      </div>
+    </section>
+  </div>
+
+  <!-- ════════ STICKY FOOTER ════════ -->
+  <div id="footerBar" class="footer-bar">
+    <div class="footer-inner">
+      <div class="prog">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;">
+          <span style="font-size:13px;font-weight:600;color:var(--txt-2);"><span id="accCount">0</span> of <span id="accTotal">8</span> accepted</span>
+          <span id="footerHint" style="font-size:12.5px;font-weight:500;color:var(--gold-deep);">8 left to accept</span>
+        </div>
+        <div class="prog-track"><div id="progFill" class="prog-fill"></div></div>
+      </div>
+      <button id="submitBtn" class="btn btn-primary is-disabled">
+        <span id="submitLabel">Accept &amp; send to desk</span>
+        <svg id="submitArrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast"></div>
+
+</div>
+
+<?!= include('SharedCalc'); ?>
+<?!= include('RiderJS'); ?>
+</body>
+</html>
