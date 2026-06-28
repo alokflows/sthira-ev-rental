@@ -62,14 +62,18 @@ function getDashboardData(token, bDataIn, hDataIn) {
     if (createdIST === today && (status === 'Active' || status === 'Returned')) newToday++;
     if (returnIST  === today && status === 'Returned') returnedToday++;
 
-    // Due today: Active bookings whose return date (checkIn + days - 1) is today
+    // Due today: Active bookings whose return date (checkIn + days - 1) is today (IST).
+    // Build the date from _ymd() (string OR Date cell) the same way the overdue block
+    // below does — never new Date(string), which parses "YYYY-MM-DD" as UTC and can
+    // slip the due date a day for Date-object cells.
     if (status === 'Active' && row[BC.CHECK_IN]) {
-      const checkIn   = new Date(row[BC.CHECK_IN]);
-      const days      = Number(row[BC.DAYS]) || 1;
-      const retDate   = new Date(checkIn);
-      retDate.setDate(retDate.getDate() + days - 1);
-      const retStr    = Utilities.formatDate(retDate, 'Asia/Kolkata', 'yyyy-MM-dd');
-      if (retStr === today) dueToday++;
+      const ciStr = _ymd(row[BC.CHECK_IN]);
+      if (ciStr) {
+        const days = Number(row[BC.DAYS]) || 1;
+        const [cy, cm, cd] = ciStr.split('-').map(Number);
+        const retStr = Utilities.formatDate(new Date(Date.UTC(cy, cm - 1, cd + days - 1)), 'UTC', 'yyyy-MM-dd');
+        if (retStr === today) dueToday++;
+      }
     }
 
     // Overdue: Active bookings past their return deadline (checkIn + days - 1) at 21:00 IST

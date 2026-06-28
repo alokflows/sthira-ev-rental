@@ -19,7 +19,12 @@ function getAccountingSummary(token, bDataIn, hDataIn) {
   const openingCash = Number(getSettingValue('openingCashBalance')) || 0;
 
   let cashIn = 0, upiIn = 0;      // inflows: rent + deposit collections
-  let cashRefund = 0, upiRefund = 0; // outflows: deposit refunds paid out
+  // Refunds are sourced from the LEDGER (below), not Bookings, so STANDALONE refunds
+  // (recordRefund — ledger-only, no Bookings row) also lower cash on hand. A booking-
+  // return refund is in BOTH the ledger and Bookings (equal), so the ledger captures
+  // every refund exactly once with no double count.
+  const _refunds = _ledgerRefunds();
+  const cashRefund = _refunds.cash, upiRefund = _refunds.upi; // outflows: deposit refunds paid out
   let lateFeesCash = 0, lateFeesUPI = 0;
   let deductionsCash = 0, deductionsUPI = 0;
 
@@ -43,8 +48,8 @@ function getAccountingSummary(token, bDataIn, hDataIn) {
     // AND ones later soft-Deleted (their money stays in the books/ledger, so the refund
     // must keep counting or accounting drifts from the immutable ledger).
     if (row[BC.ACTUAL_RETURN]) {
-      cashRefund += Number(row[BC.REFUND_CASH]) || 0;
-      upiRefund  += Number(row[BC.REFUND_UPI])  || 0;
+      // Refunds are tallied from the ledger (see _refunds above), not here — that's what
+      // lets standalone refunds count. Late fees/deductions still come from Bookings.
 
       // Late fees are kept (not refunded), attribute to mode of deposit collection
       const depositMode = (Number(row[BC.DEPOSIT_CASH]) || 0) >= (Number(row[BC.DEPOSIT_UPI]) || 0) ? 'cash' : 'upi';
@@ -161,7 +166,11 @@ function getOperatorMoney(token, bDataIn, hDataIn) {
   const today = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd');
   const baseName = function (n) { return String(n || '').replace(/\s*\(backdated\)\s*$/i, ''); };
 
-  let cashIn = 0, upiIn = 0, cashRefund = 0, upiRefund = 0;
+  // Refunds this operator actually PAID — from the ledger by Operator (so a standalone
+  // refund counts and attribution matches getDrawers/getAccountingSummary).
+  const _myRef = _ledgerRefunds().byOp[me] || { cash: 0, upi: 0 };
+  let cashIn = 0, upiIn = 0;
+  const cashRefund = _myRef.cash, upiRefund = _myRef.upi;
   let depHeldCash = 0, depHeldUPI = 0, todayCash = 0, todayUPI = 0;
   for (let i = 1; i < bData.length; i++) {
     const row = bData[i];
@@ -172,7 +181,6 @@ function getOperatorMoney(token, bDataIn, hDataIn) {
     const rc = Number(row[BC.RENT_CASH]) || 0, ru = Number(row[BC.RENT_UPI]) || 0;
     const dc = Number(row[BC.DEPOSIT_CASH]) || 0, du = Number(row[BC.DEPOSIT_UPI]) || 0;
     cashIn += rc + dc; upiIn += ru + du;
-    if (row[BC.ACTUAL_RETURN]) { cashRefund += Number(row[BC.REFUND_CASH]) || 0; upiRefund += Number(row[BC.REFUND_UPI]) || 0; }
     if (status === 'Active' || (status === 'Deleted' && !row[BC.ACTUAL_RETURN])) { depHeldCash += dc; depHeldUPI += du; }
     const created = row[BC.CREATED_AT] ? Utilities.formatDate(new Date(row[BC.CREATED_AT]), 'Asia/Kolkata', 'yyyy-MM-dd') : '';
     if (created === today && (status === 'Active' || status === 'Returned')) { todayCash += rc + dc; todayUPI += ru + du; }
@@ -201,12 +209,6 @@ function getOperatorMoney(token, bDataIn, hDataIn) {
 }
 
 // ── Handover to manager ──────────────────────────────────────────────────────
-
-// Back-compat shim — the desk now uses requestHandover(); a direct call routes to it
-// so cash never moves without a manager Verify.
-function handoverToManager(amount, handedBy, receivedBy, note, token) {
-  return requestHandover(Number(amount), note || '', receivedBy || '', token);
-}
 
 function getHandoverHistory(token, hDataIn) {
   requireAdmin(token);
@@ -316,11 +318,104 @@ function addOperator(name, pin, role, token) {
   const clean = _cleanPin(pin);
   if (!String(name || '').trim()) throw new Error('Operator name is required.');
   if (clean.length < 6) throw new Error('Set a 6-digit PIN for this operator.');
+  // The client may mint only Operator or Supervisor — never an Admin/Manager (the
+  // first manager from the setup wizard is the sole full-power account).
+  const safeRole = (role === 'Supervisor') ? 'Supervisor' : 'Operator';
+  // Cash/drawers are attributed by operator NAME, so two active people with the same
+  // name would silently merge into one drawer. Reject a duplicate active name.
+  const nm = String(name).trim();
+  if (_getOperatorsData().some(o => o.active && o.name.toLowerCase() === nm.toLowerCase())) {
+    throw new Error('An operator named "' + nm + '" already exists — pick a distinct name (cash is tracked per name).');
+  }
   const hash = _hashPin(clean);
   if (_getOperatorsData().some(o => o.active && o.pin === hash)) throw new Error('That PIN is already in use. Choose another.');
-  const id = _createOperator(name, clean, role || 'Operator');
+  const id = _createOperator(nm, clean, safeRole);
   _bumpDataVersion();
   return { success: true, operatorId: id };
+}
+
+// Manager changes an existing user between Operator and Supervisor only. Never touches
+// an Admin/Manager row (can't demote the manager) and never mints a second manager.
+function setOperatorRole(operatorId, role, token) {
+  _requireManager(token);
+  const safeRole = (role === 'Supervisor') ? 'Supervisor' : 'Operator';
+  const target = _getOperatorsData().find(o => o.operatorId === operatorId);
+  if (!target) throw new Error('Operator not found.');
+  if (target.role === 'Admin' || target.role === 'Manager') throw new Error('The manager\'s role cannot be changed.');
+  const sheet = _getSS().getSheetByName('Operators');
+  const data  = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][OC.ID]) === operatorId) {
+      sheet.getRange(i + 1, OC.ROLE + 1).setValue(safeRole);
+      _bumpDataVersion();
+      return { success: true, role: safeRole };
+    }
+  }
+  throw new Error('Operator not found.');
+}
+
+// Manager removes a user — CASH-SAFE. If the user still holds cash, settle their
+// drawer to ₹0 first: always consolidate it into the manager pool as an already-
+// approved internal transfer (the exact handover shape getDrawers understands), and
+// if settleMode is 'relieve' additionally remit that cash from the manager to the
+// company. The Ledger is append-only: this writes NEW rows recording WHO did it
+// (acting manager) and WHOSE drawer was settled (the removed user) — it never edits
+// or deletes a past row, and the removed user's own RentIn/DepositIn/Refund history
+// stays forever (mirrors a booking soft-delete). Deactivation only flips Active=false.
+function removeOperator(operatorId, settleMode, token) {
+  _requireManager(token);
+  const ops = _getOperatorsData();
+  if (ops.filter(o => o.active).length <= 1) throw new Error('At least one operator must remain.');
+  const target = ops.find(o => o.operatorId === operatorId && o.active);
+  if (!target) throw new Error('Operator not found.');
+  if (target.role === 'Admin' || target.role === 'Manager') throw new Error('The manager cannot be removed.');
+  const me = _opName(token) || 'Manager';
+
+  // Serialize the read-settle-write so the balance can't shift under us (a refund or
+  // approved transfer landing mid-removal) and over/under-settle the drawer.
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+  // Authoritative drawer balance for this user — never trust a client-sent number.
+  const dr = getDrawers(token);
+  let bal = 0;
+  (dr.operators || []).forEach(o => { if (o.name === target.name) bal = Math.round(o.balance || 0); });
+
+  if (bal > 0) {
+    if (settleMode !== 'absorb' && settleMode !== 'relieve') {
+      throw new Error('Choose how to settle ' + target.name + '\'s drawer (' + _inr(bal) + ') before removing.');
+    }
+    const managerLabel = getSettingValue('managerLabel') || 'Manager';
+    const note = 'Drawer settled on removal of ' + target.name + ' by ' + me;
+    // 1) Consolidate the user's cash into the manager pool — an APPROVED Handover row
+    //    (user → manager) so getDrawers moves it (user drawer → 0, manager += bal).
+    const hid = 'HO-' + Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyyMMddHHmmss');
+    const hrow = new Array(10).fill('');
+    hrow[HC.ID] = hid; hrow[HC.TS] = new Date(); hrow[HC.AMOUNT] = bal;
+    hrow[HC.HANDED_BY] = target.name; hrow[HC.RECEIVED_BY] = managerLabel;
+    hrow[HC.NOTE] = note; hrow[HC.STATUS] = 'Approved';
+    hrow[HC.REQUESTED_BY] = me; hrow[HC.APPROVED_BY] = me; hrow[HC.DECIDED_AT] = new Date();
+    _getSS().getSheetByName('Handovers').appendRow(hrow);
+    _appendLedgerRows([{ type: 'Handover', direction: 'transfer', amount: bal, account: 'cash',
+      operator: target.name, note: 'Transfer ' + target.name + ' → ' + managerLabel + ' · ' + note }]);
+    // 2) If relieving, remit that same cash from the manager to the company (total drops).
+    if (settleMode === 'relieve') {
+      _appendLedgerRows([{ type: 'Relieve', direction: 'debit', amount: bal, account: 'cash',
+        operator: me, note: note }]);
+    }
+  }
+
+  // Deactivate — Operators row only; the immutable Ledger is never touched.
+  const sheet = _getSS().getSheetByName('Operators');
+  const data  = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][OC.ID]) === operatorId) { sheet.getRange(i + 1, OC.ACTIVE + 1).setValue(false); break; }
+  }
+  _bumpDataVersion();
+  return { success: true, settled: bal };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function setOperatorPin(operatorId, pin, token) {
@@ -336,22 +431,6 @@ function setOperatorPin(operatorId, pin, token) {
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][OC.ID]) === operatorId) {
       sheet.getRange(i + 1, OC.PIN + 1).setValue(hash);
-      _bumpDataVersion();
-      return { success: true };
-    }
-  }
-  throw new Error('Operator not found.');
-}
-
-function deactivateOperator(operatorId, token) {
-  _requireManager(token);
-  const sheet = _getSS().getSheetByName('Operators');
-  const data  = sheet.getDataRange().getValues();
-  const activeCount = _getOperatorsData().filter(o => o.active).length;
-  if (activeCount <= 1) throw new Error('At least one operator must remain.');
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][OC.ID]) === operatorId) {
-      sheet.getRange(i + 1, OC.ACTIVE + 1).setValue(false);
       _bumpDataVersion();
       return { success: true };
     }

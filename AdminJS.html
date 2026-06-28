@@ -3,11 +3,16 @@
   'use strict';
 
   // ════════ STATE ════════
-  var A = { token:null, operator:'', role:'Operator', view:'overview', period:'week', bTab:'pending', search:'', silent:false,
-            mutateEpoch:0, authGen:0, ledgerPeriod:'today', ledgerOffset:0 };
+  var A = { token:null, operator:'', role:'Operator', view:'overview', period:'week', bTab:'today', search:'', silent:false,
+            bFilterStatus:'', bFilterVehicle:'', bFilterDate:'',
+            mutateEpoch:0, inflight:0, authGen:0, ledgerPeriod:'today', ledgerOffset:0 };
   var C = null;            // cache of everything (filled once on login, refreshed silently)
   var toastTimer = null, refreshTimer = null, refreshSeq = 0;
   function isMgr(){ return A.role==='Admin'||A.role==='Manager'; }
+  function isSup(){ return A.role==='Supervisor'; }
+  // A delegable power: a manager always has it; a supervisor has it only when the
+  // manager turned its shared toggle on (cosmetic — the server is the real gate).
+  function can(key){ return isMgr() || (isSup() && String((C&&C.settings&&C.settings[key])||'').toLowerCase()==='yes'); }
 
   function $(id){ return document.getElementById(id); }
   function show(id){ var e=$(id); if(e) e.classList.remove('hidden'); }
@@ -21,7 +26,9 @@
     if(rest) rest=rest.replace(/\B(?=(\d{2})+(?!\d))/g,',')+',';
     return (neg?'-₹':'₹')+rest+last3;
   }
-  function initials(n){ return (n||'?').split(' ').filter(Boolean).slice(0,2).map(function(p){return p[0];}).join('').toUpperCase(); }
+  // Only use a word's first character as an initial when it's actually a letter, so a
+  // label like "Tiksana (manager)" yields "T" — never "T(" off the bracketed word.
+  function initials(n){ var w=String(n||'?').split(/\s+/).filter(function(p){ return p && /[A-Za-zÀ-ÖØ-öø-ɏ]/.test(p[0]); }); return (w.slice(0,2).map(function(p){ return p[0]; }).join('')||'?').toUpperCase(); }
   function flash(msg, danger){
     var t=$('toast'); t.textContent=msg; t.classList.toggle('danger', !!danger);
     t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(function(){ t.classList.remove('show'); }, 3000);
@@ -32,6 +39,13 @@
   // Lock the clicked control until its mutation promise settles (no double-clicks). The
   // handler must RETURN its google.script.run promise; if it doesn't, we just unlock.
   function withBtn(t,p){ if(p&&p.then){ if(t) busyEl(t,true); p.then(function(){ busyEl(t,false); }, function(){ busyEl(t,false); }); } return p; }
+  // Optimistic-mutation bracket. beginMut() before an optimistic UI change + its
+  // background server call; endMut() the instant that call settles (before the
+  // reconciling silentRefresh). While A.inflight>0 a background refresh refuses to
+  // overwrite C — so a stale read (e.g. a tab-return that races a not-yet-committed
+  // write) can never make a just-made booking vanish off the screen.
+  function beginMut(){ A.mutateEpoch++; A.inflight++; }
+  function endMut(){ if(A.inflight>0) A.inflight--; }
   // Animate views only on real navigation / first paint — never on a silent background sync.
   function animCls(){ return A.silent ? '' : 'anim-fade'; }
   // Session persistence: survives an accidental refresh (F5) but is wiped when the
@@ -92,7 +106,7 @@
       if(!name){ flash('Enter your name.', true); return; }
       if(pin.length!==6){ flash('Set a 6-digit PIN.', true); return; }
       var cfg={ managerName:name, managerPin:pin, dayRate:$('wz-rate').value||'300', depositPerWeek:$('wz-deposit').value||'2000',
-        lateFeePerHour:$('wz-late').value||'50', openingCashBalance:$('wz-cash').value||'0', managerLabel:$('wz-manager').value||'Manager' };
+        lateFeePerHour:$('wz-late').value||'0', openingCashBalance:$('wz-cash').value||'0', managerLabel:$('wz-manager').value||'Manager' };
       $('wz-save').disabled=true; $('wz-save').textContent='Setting up…';
       call('completeSetupWizard',[cfg]).then(function(){ flash('Setup complete. Sign in with your PIN.'); hide('wizardScreen'); showLogin(); })
         .catch(function(e){ $('wz-save').disabled=false; $('wz-save').textContent='Finish setup'; flash(errMsg(e), true); });
@@ -178,18 +192,26 @@
     gotoView('overview');
     clearInterval(refreshTimer);
     A.pulseV=null;
-    refreshTimer=setInterval(pollPulse, 4000);   // near-instant: cheap version check
+    refreshTimer=setInterval(pollPulse, 1000);   // near-instant: cheap version check (1s)
   }
 
   // Cross-device live sync without WebSockets (GAS can't push): poll a tiny version
-  // stamp every 4s and only do the heavy reload when something actually changed.
+  // stamp every 1s and only do the heavy reload when something actually changed.
+  // A.pulseBusy guards against pile-up: if a poll's round-trip outlasts the 1s tick we
+  // skip the next one rather than stacking calls (which would burn the simultaneous-
+  // execution budget). So the effective rate self-throttles to the network latency.
   function pollPulse(){
-    if(document.hidden || !A.token) return;
+    if(document.hidden || !A.token || A.pulseBusy) return;
+    A.pulseBusy=true;
     call('getPulse',[A.token]).then(function(p){
+      A.pulseBusy=false;
       if(!p) return;
       if(A.pulseV==null){ A.pulseV=p.v; return; }
-      if(p.v!==A.pulseV){ A.pulseV=p.v; if(!modalOpen()) silentRefresh(); }
-    }).catch(function(){});
+      // Data changed on another device. If a modal is open we can't redraw under it —
+      // remember it and refresh the instant the modal closes (don't just mark it "seen",
+      // which used to leave the list stale until the NEXT change forced a manual refresh).
+      if(p.v!==A.pulseV){ A.pulseV=p.v; if(modalOpen()) A._pendingSync=true; else silentRefresh(); }
+    }).catch(function(){ A.pulseBusy=false; });
   }
 
   // ════════ CHROME ════════
@@ -255,6 +277,7 @@
       setSync(false);
       if(seq!==refreshSeq) return;            // superseded by a newer refresh
       if(epoch!==A.mutateEpoch) return;        // a mutation happened mid-flight → its own refresh reconciles
+      if(A.inflight>0) return;                 // an optimistic save is still settling → never clobber its UI with a possibly-stale read
       C=d; if(d&&d.role) A.role=d.role; updateChrome();
       if(modalOpen()) return;
       if(A.view==='settings' && !opts.settings) return;  // don't yank fields the operator is editing
@@ -266,9 +289,9 @@
   function buildAlerts(d){
     var a=[];
     if(d.overdueBookings&&d.overdueBookings.length)
-      a.push({ icon:'⏰', title:d.overdueBookings.length+' overdue rental'+(d.overdueBookings.length>1?'s':''), body:d.overdueBookings.map(function(b){return b.riderName+' ('+(b.vehicleLabel||'—')+')';}).join(', '), bg:'var(--terra-tint)', fg:'var(--terra)', go:function(){ A.bTab='active'; gotoView('bookings'); } });
+      a.push({ icon:'⏰', title:d.overdueBookings.length+' overdue rental'+(d.overdueBookings.length>1?'s':''), body:d.overdueBookings.map(function(b){return b.riderName+' ('+(b.vehicleLabel||'—')+')';}).join(', '), bg:'var(--terra-tint)', fg:'var(--terra)', go:function(){ A.bTab='today'; gotoView('bookings'); } });
     if(d.bookings.pending)
-      a.push({ icon:'🕐', title:d.bookings.pending+' booking'+(d.bookings.pending>1?'s':'')+' to confirm', body:'Assign a scooter and take payment', bg:'var(--gold-tint)', fg:'var(--gold-deep)', go:function(){ A.bTab='pending'; gotoView('bookings'); } });
+      a.push({ icon:'🕐', title:d.bookings.pending+' booking'+(d.bookings.pending>1?'s':'')+' to confirm', body:'Assign a scooter and take payment', bg:'var(--gold-tint)', fg:'var(--gold-deep)', go:function(){ A.bTab='today'; gotoView('bookings'); } });
     if(d.fleet.available===0) a.push({ icon:'🛵', title:'All scooters are out', body:'No vehicles available to rent right now', bg:'var(--terra-tint)', fg:'var(--terra)', go:function(){ gotoView('fleet'); } });
     else if(d.fleet.available===1) a.push({ icon:'🛵', title:'Only 1 scooter left', body:'Fleet is nearly fully rented', bg:'var(--gold-tint)', fg:'var(--gold-deep)', go:function(){ gotoView('fleet'); } });
     return a;
@@ -280,7 +303,7 @@
     var body=alerts.length ? alerts.map(function(a,i){
       return '<div data-action="alert-go" data-i="'+i+'" style="display:flex;gap:12px;align-items:flex-start;padding:13px;border-radius:14px;background:'+a.bg+';margin-bottom:10px;cursor:pointer;">'
         +'<span style="width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.7);display:flex;align-items:center;justify-content:center;font-size:16px;flex:none;">'+a.icon+'</span>'
-        +'<div style="flex:1;"><div style="font-weight:600;font-size:14px;color:'+a.fg+';">'+esc(a.title)+'</div><div style="font-size:13px;color:#7C7565;margin-top:2px;">'+esc(a.body)+'</div></div></div>';
+        +'<div style="flex:1;"><div style="font-weight:600;font-size:14px;color:'+a.fg+';">'+esc(a.title)+'</div><div style="font-size:13px;color:var(--muted-2);margin-top:2px;">'+esc(a.body)+'</div></div></div>';
     }).join('') : '<div class="empty">All clear. Nothing needs you right now. 🌿</div>';
     openModal('Alerts', (alerts.length||0)+' item(s) need attention', body, '');
   }
@@ -289,13 +312,16 @@
   function renderOverview(){
     var d=C.dashboard, due=bkDueToday(), alerts=buildAlerts(d); _alertActions=alerts;
     var oMgr=isMgr();
-    var oCash=oMgr?d.accounting.cashInHand:((C.drawers&&C.drawers.myBalance!=null)?C.drawers.myBalance:0);
+    // Show the business-wide cash headline to a manager OR a supViewMoney supervisor;
+    // everyone else sees only their own drawer. (Relieve stays manager-only below.)
+    var oCashAll=oMgr||can('supViewMoney');
+    var oCash=oCashAll?d.accounting.cashInHand:((C.drawers&&C.drawers.myBalance!=null)?C.drawers.myBalance:0);
     var stats=[
       { lbl:'Available', val:String(d.fleet.available), sub:'/ '+d.fleet.total, dot:'#5E9B7A' },
       { lbl:'Out on rent', val:String(d.fleet.out), sub:'scooters', dot:'#D29A3E' },
       { lbl:'Due back today', val:String(d.bookings.dueToday), sub:'returns', dot:'#C0673D' },
       { lbl:'Pending', val:String(d.bookings.pending), sub:'to confirm', dot:'#7E94B8' },
-      { lbl:oMgr?'Cash in hand':'Your cash in hand', val:inr(oCash), sub:'', dot:'#2F5D50', cash:true }
+      { lbl:oCashAll?'Cash in hand':'Your cash in hand', val:inr(oCash), sub:'', dot:'#2F5D50', cash:true }
     ];
     var statHtml=stats.map(function(s){
       return '<div class="stat"'+(s.cash?' style="background:var(--pine-tint);border-color:var(--pine-line);"':'')+'><div style="display:flex;align-items:center;justify-content:space-between;"><span class="lbl">'+s.lbl+'</span><span class="dot" style="background:'+s.dot+';"></span></div>'
@@ -305,15 +331,15 @@
     var alertHtml=alerts.length ? alerts.map(function(a,i){
       return '<div data-action="alert-ov" data-i="'+i+'" style="display:flex;gap:12px;align-items:flex-start;padding:12px;border-radius:14px;background:'+a.bg+';margin-bottom:9px;cursor:pointer;">'
         +'<span style="width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.7);display:flex;align-items:center;justify-content:center;font-size:16px;flex:none;">'+a.icon+'</span>'
-        +'<div style="flex:1;"><div style="font-weight:600;font-size:13.5px;color:'+a.fg+';">'+esc(a.title)+'</div><div style="font-size:12.5px;color:#7C7565;">'+esc(a.body)+'</div></div></div>';
+        +'<div style="flex:1;"><div style="font-weight:600;font-size:13.5px;color:'+a.fg+';">'+esc(a.title)+'</div><div style="font-size:12.5px;color:var(--muted-2);">'+esc(a.body)+'</div></div></div>';
     }).join('') : '<div class="empty" style="padding:18px 0;">All clear.</div>';
 
     $('view-overview').innerHTML='<div class="'+animCls()+'"><div class="stat-grid">'+statHtml+'</div><div class="split">'
       +'<div class="panel"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><h2>Due back today</h2><button class="link-btn" data-action="goto" data-view="bookings">View all →</button></div>'+dueHtml+'</div>'
       +'<div style="display:flex;flex-direction:column;gap:18px;"><div class="panel"><h2 style="margin-bottom:12px;">Needs attention</h2>'+alertHtml+'</div>'
-      +'<div class="cash-hero"><div style="font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;opacity:.8;font-weight:600;">'+(oMgr?'Cash in hand':'Your cash in hand')+'</div>'
+      +'<div class="cash-hero"><div style="font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;opacity:.8;font-weight:600;">'+(oCashAll?'Cash in hand':'Your cash in hand')+'</div>'
       +'<div style="font-family:var(--serif);font-size:38px;font-weight:500;margin-top:6px;">'+inr(oCash)+'</div>'
-      +'<div style="font-size:13px;opacity:.82;margin-top:2px;">'+(oMgr?'Drawer balance · deposits held '+inr(d.accounting.depositHeldTotal):'Cash you are physically holding')+'</div>'
+      +'<div style="font-size:13px;opacity:.82;margin-top:2px;">'+(oCashAll?'Drawer balance · deposits held '+inr(d.accounting.depositHeldTotal):'Cash you are physically holding')+'</div>'
       +(oMgr
         ?'<button data-action="relieve" style="margin-top:16px;width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:#fff;font-weight:600;font-size:14px;cursor:pointer;">Relieve to company</button>'
         :'<button data-action="handover" style="margin-top:16px;width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:#fff;font-weight:600;font-size:14px;cursor:pointer;">Transfer cash</button>')
@@ -341,44 +367,123 @@
     if(st==='staff') return { label:'Staff', bg:'var(--surface-2)', fg:'#3F5E82' };
     return { label:st, bg:'#eee', fg:'#555' };
   }
+  // Today's worklist, grouped: what the desk acts on today. Returns done today close the loop.
+  function bkTodayGroups(){
+    var t=todayStr();
+    var active=bkByStatus('Active');
+    return {
+      pending: bkByStatus('Pending'),
+      due:     active.filter(function(b){ return b.checkOut===t; }),
+      out:     active.filter(function(b){ return b.checkOut!==t; }),
+      returnedToday: (C.bookings||[]).filter(function(b){ return b.status==='Returned' && String(b.actualReturn||'').indexOf(t)===0; })
+    };
+  }
+  function bkTodayCount(){ var g=bkTodayGroups(); return g.pending.length+g.due.length+g.out.length+g.returnedToday.length; }
+  // Section header inside the booking list (only rendered when the group is non-empty).
+  function bkSection(title, arr){
+    if(!arr.length) return '';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:13px 20px 9px;border-top:1px solid var(--hair);background:var(--surface);">'
+      +'<span style="font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);">'+esc(title)+'</span>'
+      +'<span class="cct" style="background:var(--surface-2);color:var(--muted-2);border-radius:999px;padding:1px 8px;font-size:11px;">'+arr.length+'</span></div>'
+      +arr.map(bookingRow).join('');
+  }
   function renderBookings(){
-    var tabs=[['pending','Pending'],['active','Active'],['due','Due today'],['returned','Returned'],['all','All']];
-    var counts={ pending:bkByStatus('Pending').length, active:bkByStatus('Active').length, due:bkDueToday().length, returned:bkByStatus('Returned').length, all:(C.bookings||[]).length };
+    var tabs=[['today','Today'],['all','All']];
+    var counts={ today:bkTodayCount(), all:(C.bookings||[]).length };
     var chipHtml=tabs.map(function(t){ return '<button class="chip'+(A.bTab===t[0]?' on':'')+'" data-action="btab" data-tab="'+t[0]+'">'+t[1]+(counts[t[0]]?'<span class="cct">'+counts[t[0]]+'</span>':'')+'</button>'; }).join('');
+    // Filters button — available to every signed-in user (manager AND operator).
+    var activeFilters=(A.bFilterStatus?1:0)+(A.bFilterVehicle?1:0)+(A.bFilterDate?1:0);
+    var filterBtn='<button class="chip'+(A.bFiltersOpen?' on':'')+'" data-action="bk-filters-toggle" style="margin-left:auto;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v5l-4 2v-7z"/></svg>Filters'+(activeFilters?'<span class="cct">'+activeFilters+'</span>':'')+'</button>';
+    // Past booking — manager, a supervisor granted supRunBookings, OR an operator the
+    // manager has granted the ability to.
+    var canPast=can('supRunBookings') || String((C.settings&&C.settings.allowOperatorPastBookings)||'').toLowerCase()==='yes';
+    // Filter panel (rendered only on the All tab) — collapsed; slides open on the Filters toggle.
+    var panel='';
+    if(A.bTab==='all'){
+      var vehLabels={}; (C.bookings||[]).forEach(function(b){ if(b.vehicleLabel) vehLabels[b.vehicleLabel]=1; });
+      (C.vehicles||[]).forEach(function(v){ if(v.label) vehLabels[v.label]=1; });
+      var vehOpts='<option value="">All scooters</option>'+Object.keys(vehLabels).sort().map(function(l){ return '<option'+(A.bFilterVehicle===l?' selected':'')+'>'+esc(l)+'</option>'; }).join('');
+      var statuses=['Pending','Active','Due','Returned','Cancelled','Deleted'];
+      var stOpts='<option value="">All statuses</option>'+statuses.map(function(s){ return '<option value="'+s+'"'+(A.bFilterStatus===s?' selected':'')+'>'+(s==='Due'?'Due today':s)+'</option>'; }).join('');
+      panel='<div id="bk-filters" class="filt-panel"><div class="filt-grid">'
+        +'<div class="fcol"><label>Status</label><select id="bk-f-status" class="field">'+stOpts+'</select></div>'
+        +'<div class="fcol"><label>Scooter</label><select id="bk-f-vehicle" class="field">'+vehOpts+'</select></div>'
+        +'<div class="fcol"><label>Return on</label><input id="bk-f-date" class="field" type="date" value="'+esc(A.bFilterDate)+'"></div>'
+        +'<button data-action="bk-filter-clear" style="border:1px solid var(--line-3);background:var(--surface);color:var(--terra);padding:11px 16px;border-radius:11px;font-weight:600;font-size:13.5px;cursor:pointer;">Clear</button>'
+        +'</div></div>';
+    }
     $('view-bookings').innerHTML='<div class="'+animCls()+'">'
       +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:18px;"><div style="position:relative;flex:1;min-width:220px;">'
       +'<svg style="position:absolute;left:14px;top:50%;transform:translateY(-50%);" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9A9384" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>'
       +'<input id="bk-search" value="'+esc(A.search)+'" placeholder="Search by name, phone or booking ID…" style="width:100%;padding:13px 14px 13px 42px;border:1px solid var(--line-3);border-radius:13px;background:var(--card);font-size:14.5px;color:var(--ink);"></div>'
-      +(isMgr()?'<button class="btn-sm" data-action="add-past-booking" style="background:var(--surface);color:var(--txt-2);border:1px solid var(--line-3);box-shadow:none;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Past booking</button>':'')+'</div>'
-      +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">'+chipHtml+'</div>'
+      +(canPast?'<button class="btn-sm" data-action="add-past-booking" style="background:var(--surface);color:var(--txt-2);border:1px solid var(--line-3);box-shadow:none;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Past booking</button>':'')+'</div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:18px;">'+chipHtml+filterBtn+'</div>'
+      +panel
       +'<div id="bk-list" style="background:var(--card);border:1px solid var(--line);border-radius:20px;overflow:hidden;"></div></div>';
     var si=$('bk-search');
     si.oninput=function(){ A.search=si.value; paintBookingList(); };
+    // Wire the filter fields (All tab only) and slide the panel in if it was left open.
+    if(A.bTab==='all'){
+      var fs=$('bk-f-status'); if(fs) fs.onchange=function(){ A.bFilterStatus=fs.value; paintBookingList(); };
+      var fv=$('bk-f-vehicle'); if(fv) fv.onchange=function(){ A.bFilterVehicle=fv.value; paintBookingList(); };
+      var fd=$('bk-f-date'); if(fd) fd.onchange=function(){ A.bFilterDate=fd.value; paintBookingList(); };
+      // Slide the panel open on a real toggle; on a SILENT auto-refresh show it already
+      // open (no re-slide) so a background sync never flickers the screen.
+      if(A.bFiltersOpen){
+        if(A.silent){ var p0=$('bk-filters'); if(p0) p0.classList.add('open'); }
+        else requestAnimationFrame(function(){ requestAnimationFrame(function(){ var p=$('bk-filters'); if(p) p.classList.add('open'); }); });
+      }
+    }
     paintBookingList();
   }
+  // Filters toggle — from Today it switches to All and opens; on All it slides open/closed in place.
+  function toggleFilters(){
+    if(A.bTab!=='all'){ A.bTab='all'; A.bFiltersOpen=true; renderBookings(); return; }
+    A.bFiltersOpen=!A.bFiltersOpen;
+    var p=$('bk-filters'); if(p) p.classList.toggle('open', A.bFiltersOpen);
+    var btn=document.querySelector('[data-action="bk-filters-toggle"]'); if(btn) btn.classList.toggle('on', A.bFiltersOpen);
+  }
+  function clearBookingFilters(){ A.bFilterStatus=''; A.bFilterVehicle=''; A.bFilterDate=''; renderBookings(); }
   function paintBookingList(){
     var list=$('bk-list'); if(!list) return;
-    var rows;
+    // Search is a global override — it scans every booking regardless of tab/filters.
     if(A.search.trim()){
       var q=A.search.trim().toLowerCase();
-      rows=(C.bookings||[]).filter(function(b){ return (b.riderName+' '+b.mobile+' '+b.bookingId+' '+(b.vehicleLabel||'')+' '+(b.cottageName||'')+' '+(b.dlNumber||'')).toLowerCase().indexOf(q)>=0; });
-    } else if(A.bTab==='pending') rows=bkByStatus('Pending');
-    else if(A.bTab==='active') rows=bkByStatus('Active');
-    else if(A.bTab==='due') rows=bkDueToday();
-    else if(A.bTab==='returned') rows=bkByStatus('Returned');
-    else rows=(C.bookings||[]);
-    list.innerHTML = rows.length ? rows.map(bookingRow).join('') : '<div class="empty">No bookings here.</div>';
+      var sr=(C.bookings||[]).filter(function(b){ return (b.riderName+' '+b.mobile+' '+b.bookingId+' '+(b.vehicleLabel||'')+' '+(b.cottageName||'')+' '+(b.dlNumber||'')).toLowerCase().indexOf(q)>=0; });
+      list.innerHTML = sr.length ? sr.map(bookingRow).join('') : '<div class="empty">No bookings match “'+esc(A.search.trim())+'”.</div>';
+      return;
+    }
+    if(A.bTab!=='all'){
+      var g=bkTodayGroups();
+      var html=bkSection('Pending — confirm & hand over', g.pending)
+        +bkSection('Due back today', g.due)
+        +bkSection('Out now', g.out)
+        +bkSection('Returned today', g.returnedToday);
+      list.innerHTML = html || '<div class="empty">Nothing for today yet.</div>';
+      return;
+    }
+    // All — newest first (C.bookings is already reversed) with the optional filters applied.
+    var rows=(C.bookings||[]).slice();
+    if(A.bFilterStatus){
+      if(A.bFilterStatus==='Due'){ var t=todayStr(); rows=rows.filter(function(b){ return b.status==='Active' && b.checkOut===t; }); }
+      else rows=rows.filter(function(b){ return b.status===A.bFilterStatus; });
+    }
+    if(A.bFilterVehicle) rows=rows.filter(function(b){ return (b.vehicleLabel||'')===A.bFilterVehicle; });
+    if(A.bFilterDate)    rows=rows.filter(function(b){ return b.checkOutYmd===A.bFilterDate; });
+    list.innerHTML = rows.length ? rows.map(bookingRow).join('') : '<div class="empty">No bookings match these filters.</div>';
   }
   function bookingRow(b){
     // Whole row opens the details overlay (where the actions live) — no inline
     // Confirm/Return/Cancel buttons, so a stray tap can never mutate a booking.
     var sm=statusMeta(b.status);
-    return '<div data-action="bk-details" data-id="'+esc(b.bookingId)+'" style="display:flex;align-items:center;gap:16px;padding:16px 20px;border-top:1px solid var(--hair);flex-wrap:wrap;cursor:pointer;"><div class="av">'+esc(initials(b.riderName))+'</div>'
-      +'<div style="flex:1.4;min-width:120px;"><div style="font-weight:600;font-size:15px;">'+esc(b.riderName)+'</div><div style="font-size:12.5px;color:var(--muted-2);">'+esc(b.cottageName||'—')+' · '+esc(b.mobile)+'</div></div>'
-      +'<div style="flex:1;min-width:90px;"><div style="font-size:12.5px;color:var(--faint);">Booking</div><div style="font-family:var(--mono);font-size:13px;color:var(--txt-2);">'+esc(b.bookingId)+'</div></div>'
-      +'<div style="flex:1;min-width:96px;"><div style="font-size:12.5px;color:var(--faint);">Scooter</div><div style="font-family:var(--mono);font-size:13px;color:var(--txt-2);">'+esc(b.vehicleLabel||'—')+'</div></div>'
-      +'<div style="flex:1.1;min-width:110px;"><div style="font-size:12.5px;color:var(--faint);">'+(b.status==='Returned'?'Returned':'Until')+'</div><div style="font-size:13px;color:var(--txt-2);">'+esc(b.checkOut||'—')+'</div></div>'
-      +'<div style="flex:none;display:flex;gap:9px;align-items:center;margin-left:auto;"><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';">'+sm.label+'</span>'
+    // Layout lives in CSS (.bk-row): the desktop rule reproduces the old inline flex
+    // exactly; a ≤640px rule stacks it into a clean card (no overlap). See Admin.html.
+    return '<div data-action="bk-details" data-id="'+esc(b.bookingId)+'" class="bk-row"><div class="av">'+esc(initials(b.riderName))+'</div>'
+      +'<div class="bk-name"><div class="nm">'+esc(b.riderName)+'</div><div class="mt">'+esc(b.cottageName||'—')+' · '+esc(b.mobile)+'</div></div>'
+      +'<div class="bk-c bk-book"><div class="bk-cap">Booking</div><div class="bk-mono">'+esc(b.bookingId)+'</div></div>'
+      +'<div class="bk-c bk-scoot"><div class="bk-cap">Scooter</div><div class="bk-mono">'+esc(b.vehicleLabel||'—')+'</div></div>'
+      +'<div class="bk-c bk-until"><div class="bk-cap">'+(b.status==='Returned'?'Returned':'Until')+'</div><div class="bk-plain">'+esc(b.checkOut||'—')+'</div></div>'
+      +'<div class="bk-end"><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';">'+sm.label+'</span>'
       +'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div></div>';
   }
 
@@ -402,15 +507,18 @@
         btns+='<button class="veh-ib" data-action="veh-edit" data-id="'+esc(v.vehicleId)+'" title="Edit">'+IB_E+'</button>';
         btns+='<button class="veh-ib danger" data-action="veh-delete" data-id="'+esc(v.vehicleId)+'" title="Remove">'+IB_T+'</button>';
       }
-      return '<div style="background:var(--card);border:1px solid var(--line);border-radius:15px;padding:13px 14px;overflow:hidden;"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><span style="font-family:var(--mono);font-weight:500;font-size:15px;letter-spacing:.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.label)+'</span><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';flex:none;">'+sm.label+'</span></div>'
-        +'<div style="font-size:12px;color:var(--muted-2);margin-top:3px;">'+esc(v.type||'Rental')+(v.vehicleId?' · '+esc(v.vehicleId):'')+'</div>'
-        +'<div style="margin-top:7px;font-size:12px;color:var(--muted-2);word-break:break-word;">'+note+'</div>'
-        +(btns?'<div style="display:flex;gap:6px;margin-top:10px;justify-content:flex-end;">'+btns+'</div>':'')+'</div>';
+      // Wide + short, compact card: id + status on top, the meta and the action icons
+      // share the bottom row so the box stays short and the icons sit neatly to the right.
+      return '<div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:11px 13px;overflow:hidden;display:flex;flex-direction:column;gap:6px;">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><span style="font-family:var(--mono);font-weight:500;font-size:14.5px;letter-spacing:.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.label)+'</span><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';flex:none;">'+sm.label+'</span></div>'
+        +'<div style="font-size:11.5px;color:var(--muted-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.type||'Rental')+(v.vehicleId?' · '+esc(v.vehicleId):'')+'</div>'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:24px;"><span style="font-size:11.5px;color:var(--muted-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;">'+note+'</span>'+(btns?'<span style="display:flex;gap:5px;flex:none;">'+btns+'</span>':'')+'</div>'
+        +'</div>';
     }).join('');
     $('view-fleet').innerHTML='<div class="'+animCls()+'"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px;">'
       +'<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13.5px;color:var(--muted);"><div><b style="color:var(--pine-soft);">'+avail+'</b> available</div><div><b style="color:#B07A2E;">'+out+'</b> out</div><div><b style="color:#9A8F7C;">'+maint+'</b> in maintenance</div></div>'
       +'<button class="btn" data-action="add-vehicle" style="border:1px solid var(--line-2);background:var(--card);color:var(--txt-2);font-weight:600;font-size:13.5px;padding:10px 16px;border-radius:12px;display:flex;align-items:center;gap:7px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add vehicle</button></div>'
-      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;">'+(cards||'<div class="empty" style="grid-column:1/-1;">No scooters yet. Add your first vehicle.</div>')+'</div></div>';
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:11px;">'+(cards||'<div class="empty" style="grid-column:1/-1;">No scooters yet. Add your first vehicle.</div>')+'</div></div>';
   }
 
   // ════════ MONEY (bank-like: drawers + passbook ledger) ════════
@@ -419,7 +527,7 @@
     return '<div class="led-row"><div class="av" style="width:38px;height:38px;">'+esc(initials(name))+'</div>'
       +'<div style="flex:1;min-width:0;"><div class="nm">'+esc(name)+(isManager?' <span class="pill pill-pine" style="padding:1px 8px;font-size:10.5px;">manager</span>':'')+'</div>'
       +'<div style="font-size:12px;color:var(--muted-2);">'+(isManager?'Opening + verified handovers':'Cash physically held')+'</div></div>'
-      +(opName&&isMgr()?'<button class="link-btn" data-action="led-operator" data-op="'+esc(opName)+'">View</button>':'')
+      +(opName&&can('supViewMoney')?'<button class="link-btn" data-action="led-operator" data-op="'+esc(opName)+'">View</button>':'')
       +'<div style="font-family:var(--serif);font-size:20px;font-weight:500;">'+inr(bal)+'</div></div>';
   }
   // Manager drill-downs: tap Cash-in-hand / Deposits-held for the per-operator breakdown (renders from cache).
@@ -440,12 +548,15 @@
     }
   }
   function renderMoney(){
-    var acc=C.dashboard.accounting, today=C.dashboard.today, dr=C.drawers||{}, pend=(C.pendingHandovers||[]), mgr=isMgr();
+    // canMoney drives the VIEW breadth (manager-style cards + all drawers + full
+    // passbook) for a manager or a supViewMoney supervisor. mgr stays isMgr() and gates
+    // the never-delegable MUTATIONS (refund / audit / day close-out → relieve).
+    var acc=C.dashboard.accounting, today=C.dashboard.today, dr=C.drawers||{}, pend=(C.pendingHandovers||[]), mgr=isMgr(), canMoney=can('supViewMoney');
     // Plain, scannable headline numbers. The cash/UPI split rides as small subtext so
     // there's one number to read per box, with the breakdown there if you look closer.
     var mix=function(c,u){ return 'cash '+inr(c)+' &nbsp;·&nbsp; UPI '+inr(u); };
     var cards;
-    if(mgr){
+    if(canMoney){
       var biz=(today.todayTotal!=null?today.todayTotal:((today.todayCashIn||0)+(today.todayUPIIn||0)));
       var pCash=(acc.cashIn||0)-(acc.depositHeldCash||0)-(acc.cashRefund||0);   // profit, cash side
       var pUPI =(acc.upiIn||0)-(acc.depositHeldUPI||0)-(acc.upiRefund||0);      // profit, UPI side
@@ -467,11 +578,11 @@
         { lbl:'Given to manager',    val:inr(om.givenToManager||0), sub:'handed over & verified' }
       ];
     }
-    var cardHtml=cards.map(function(c){ var canDrill=(mgr&&c.drill); var st=(c.accent?'background:var(--pine);color:#fff;border-color:var(--pine);':'')+(canDrill?'cursor:pointer;':''); return '<div class="stat"'+(canDrill?' data-action="money-drill" data-drill="'+c.drill+'"':'')+(st?' style="'+st+'"':'')+'><div class="lbl" style="'+(c.accent?'color:rgba(255,255,255,.82);':'')+'">'+c.lbl+(canDrill?' <span style="color:var(--faint);font-weight:400;">›</span>':'')+'</div><div style="font-family:var(--serif);font-size:22px;font-weight:500;margin-top:6px;'+(c.accent?'color:#fff;':'')+'">'+c.val+'</div><div style="font-size:11px;margin-top:4px;'+(c.accent?'color:rgba(255,255,255,.85);':'color:var(--muted-2);')+'">'+c.sub+'</div></div>'; }).join('');
+    var cardHtml=cards.map(function(c){ var canDrill=(canMoney&&c.drill); var st=(c.accent?'background:var(--pine);color:#fff;border-color:var(--pine);':'')+(canDrill?'cursor:pointer;':''); return '<div class="stat"'+(canDrill?' data-action="money-drill" data-drill="'+c.drill+'"':'')+(st?' style="'+st+'"':'')+'><div class="lbl" style="'+(c.accent?'color:rgba(255,255,255,.82);':'')+'">'+c.lbl+(canDrill?' <span style="color:var(--faint);font-weight:400;">›</span>':'')+'</div><div style="font-family:var(--serif);font-size:22px;font-weight:500;margin-top:6px;'+(c.accent?'color:#fff;':'')+'">'+c.val+'</div><div style="font-size:11px;margin-top:4px;'+(c.accent?'color:rgba(255,255,255,.85);':'color:var(--muted-2);')+'">'+c.sub+'</div></div>'; }).join('');
 
     // Drawers
     var drawerHtml;
-    if(mgr){
+    if(canMoney){
       var rows=(dr.manager?drawerLine(dr.manager.name, dr.manager.balance, true, ''):'')
         +((dr.operators||[]).length?(dr.operators||[]).map(function(o){ return drawerLine(o.name, o.balance, false, o.name); }).join(''):'<div class="empty" style="padding:14px 0;">No operator collections yet.</div>');
       drawerHtml='<div class="panel"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><h2>Drawers</h2><span style="font-size:12px;color:var(--muted-2);">Σ = '+inr(acc.cashInHand)+'</span></div>'+rows+'</div>';
@@ -487,9 +598,9 @@
           +'<button class="btn" data-action="ho-verify" data-id="'+esc(h.handoverId)+'" style="padding:8px 14px;border-radius:10px;border:none;background:var(--pine);color:#fff;font-size:13px;font-weight:600;">Verify</button></div>'; }).join('')
           :'<div class="empty" style="padding:14px 0;">Nothing waiting. 🌿</div>')+'</div>';
 
-    // Operator only — the status of transfers they have SENT.
+    // Operator (and ungranted supervisor) only — the status of transfers they SENT.
     var outHtml='';
-    if(!mgr){
+    if(!canMoney){
       var mine=(C.handovers||[]).filter(function(h){ return h.handedBy===A.operator; });
       outHtml='<div class="panel"><h2 style="margin-bottom:6px;">Your transfers</h2>'
         +(mine.length?mine.map(function(h){ var stc=h.status==='Approved'?'var(--pine)':(h.status==='Rejected'?'var(--terra)':'var(--gold-deep)'); return '<div class="led-row"><div style="flex:1;min-width:0;"><div class="nm">'+inr(h.amountCash)+' → '+esc(h.receivedBy||'—')+'</div><div style="font-size:12px;color:var(--muted-2);">'+esc(h.timestamp)+(h.note?' · '+esc(h.note):'')+'</div></div><span class="statuspill" style="background:var(--surface-2);color:'+stc+';">'+esc(h.status)+'</span></div>'; }).join('')
@@ -501,7 +612,8 @@
     var filterNote=A.ledgerFilterOp?'<button class="link-btn" data-action="led-clearfilter">Showing '+esc(A.ledgerFilterOp)+' ✕</button>':'';
     var passbook='<div class="panel"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;"><h2>Passbook</h2><div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;">'+filterNote+chips
       +(mgr?'<button class="btn" data-action="refund" style="padding:8px 13px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-size:13px;font-weight:600;">Refund</button>':'')
-      +(mgr?'<button class="btn" data-action="run-audit" title="Self-audit the books" style="padding:8px 13px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-size:13px;font-weight:600;">Audit</button>':'')+'</div></div>'
+      +(mgr?'<button class="btn" data-action="run-audit" title="Self-audit the books" style="padding:8px 13px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-size:13px;font-weight:600;">Audit</button>':'')
+      +(mgr?'<button class="btn" data-action="day-closeout" title="End-of-day summary" style="padding:8px 13px;border-radius:10px;border:none;background:var(--pine);color:#fff;font-size:13px;font-weight:600;">Day close-out</button>':'')+'</div></div>'
       +'<div id="led-list"><div class="empty"><span class="spin" style="color:var(--pine);"></span></div></div></div>';
 
     var actions=mgr?'<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 18px;"></div>':'';
@@ -545,11 +657,11 @@
     }
     var series=a.series||[];
     var maxRev=Math.max(1, Math.max.apply(null, series.map(function(d){return d.revenue;}).concat([0])));
-    var bars=series.length ? series.map(function(d){ var h=Math.round(d.revenue/maxRev*100); return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px;height:100%;justify-content:flex-end;min-width:28px;"><div style="font-size:11px;color:var(--faint);font-family:var(--mono);">'+(d.revenue?('₹'+(d.revenue/1000).toFixed(1)+'k'):'')+'</div><div style="width:100%;max-width:42px;height:'+Math.max(2,h)+'%;background:var(--pine);border-radius:8px 8px 0 0;"></div><div style="font-size:11.5px;color:#7C7565;white-space:nowrap;">'+esc(d.date)+'</div></div>'; }).join('') : '<div class="empty" style="margin:auto;">No activity in this period yet.</div>';
+    var bars=series.length ? series.map(function(d){ var h=Math.round(d.revenue/maxRev*100); return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px;height:100%;justify-content:flex-end;min-width:28px;"><div style="font-size:11px;color:var(--faint);font-family:var(--mono);">'+(d.revenue?('₹'+(d.revenue/1000).toFixed(1)+'k'):'')+'</div><div style="width:100%;max-width:42px;height:'+Math.max(2,h)+'%;background:var(--pine);border-radius:8px 8px 0 0;"></div><div style="font-size:11.5px;color:var(--muted-2);white-space:nowrap;">'+esc(d.date)+'</div></div>'; }).join('') : '<div class="empty" style="margin:auto;">No activity in this period yet.</div>';
     var stats=[{ lbl:'Revenue (rent)', val:inr(a.totalRevenue) },{ lbl:'Bookings', val:String(a.totalBookings) },{ lbl:'Late fees', val:inr(a.totalLateFees) },{ lbl:'Deductions', val:inr(a.totalDeductions) }];
     var statHtml=stats.map(function(s){ return '<div class="stat"><div class="lbl">'+s.lbl+'</div><div style="font-family:var(--serif);font-size:30px;font-weight:500;margin-top:10px;">'+s.val+'</div></div>'; }).join('');
     var s=C.settings||{};
-    var repCard = isMgr() ? '<div class="panel" style="margin-top:18px;"><h2 style="margin-bottom:4px;">Email &amp; export</h2>'
+    var repCard = can('supViewMoney') ? '<div class="panel" style="margin-top:18px;"><h2 style="margin-bottom:4px;">Email &amp; export</h2>'
       +'<p style="margin:0 0 14px;font-size:13.5px;color:var(--muted-2);">Send or download this report. <b>Detailed</b> adds every booking + ledger transaction; <b>summary</b> is the totals only.</p>'
       +'<div class="gf"><div><label class="field-label">Reporting email (To)</label><input id="rep-to" class="field" type="email" value="'+esc(s.reportEmail||'')+'" placeholder="manager@…"></div>'
       +'<div><label class="field-label">CC (comma-separated)</label><input id="rep-cc" class="field" value="'+esc(s.reportCC||'')+'" placeholder="owner@…, accounts@…"></div></div>'
@@ -585,12 +697,17 @@
     var emailOn=String(s.emailEnabled||'no').toLowerCase()==='yes';
     var sortedOps=ops.slice().sort(function(a,b){ var am=(a.role==='Admin'||a.role==='Manager')?0:1, bm=(b.role==='Admin'||b.role==='Manager')?0:1; return am-bm; });
     var opRows=sortedOps.map(function(o){
-      var isM=(o.role==='Admin'||o.role==='Manager');
+      var isM=(o.role==='Admin'||o.role==='Manager'), isSupR=(o.role==='Supervisor');
+      var pill=isM?' <span class="pill pill-pine" style="padding:1px 8px;font-size:10.5px;">Manager</span>'
+              :(isSupR?' <span class="pill pill-gold" style="padding:1px 8px;font-size:10.5px;">Supervisor</span>':'');
+      var roleLbl=isM?'Manager':(isSupR?'Supervisor':'Operator');
+      // Role toggle (Operator ⇄ Supervisor) — never shown for the manager row.
+      var roleCtl=isM?'':'<button class="link-btn" data-action="op-setrole" data-id="'+esc(o.operatorId)+'" data-role="'+(isSupR?'Operator':'Supervisor')+'">'+(isSupR?'Make operator':'Make supervisor')+'</button>';
       return '<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--hair);flex-wrap:wrap;"><div class="av">'+esc(initials(o.name))+'</div>'
-        +'<div style="flex:1;min-width:120px;"><div style="font-weight:600;font-size:14.5px;">'+esc(o.name)+(isM?' <span class="pill pill-pine" style="padding:1px 8px;font-size:10.5px;">Manager</span>':'')+(o.name===A.operator?' <span style="font-size:11px;color:var(--pine);font-weight:600;">· you</span>':'')+'</div><div style="font-size:12px;color:var(--muted-2);">'+(isM?'Manager':'Operator')+'</div></div>'
+        +'<div style="flex:1;min-width:120px;"><div style="font-weight:600;font-size:14.5px;">'+esc(o.name)+pill+(o.name===A.operator?' <span style="font-size:11px;color:var(--pine);font-weight:600;">· you</span>':'')+'</div><div style="font-size:12px;color:var(--muted-2);">'+roleLbl+'</div></div>'
         +'<div style="display:flex;align-items:center;gap:6px;"><input class="field" id="op-email-'+esc(o.operatorId)+'" value="'+esc(o.email||'')+'" placeholder="email (reports)" style="width:160px;padding:9px;font-size:12.5px;"><button class="link-btn" data-action="op-setemail" data-id="'+esc(o.operatorId)+'">Save</button></div>'
         +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:12px;color:var(--faint);font-weight:600;">PIN</span><input class="field" id="op-pin-'+esc(o.operatorId)+'" value="" placeholder="••••••" maxlength="6" inputmode="numeric" style="width:90px;text-align:center;font-family:var(--mono);letter-spacing:.2em;padding:9px;"><button class="link-btn" data-action="op-setpin" data-id="'+esc(o.operatorId)+'">Reset</button></div>'
-        +(isM?'<span style="width:62px;flex:none;"></span>':'<button class="link-btn" data-action="op-remove" data-id="'+esc(o.operatorId)+'" style="color:var(--terra);">Remove</button>')+'</div>';
+        +(isM?'<span style="width:62px;flex:none;"></span>':'<div style="display:flex;align-items:center;gap:10px;">'+roleCtl+'<button class="link-btn" data-action="op-remove" data-id="'+esc(o.operatorId)+'" style="color:var(--terra);">Remove</button></div>')+'</div>';
     }).join('');
     var cotRows=cots.map(function(c){ return '<div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1px solid var(--hair);"><div style="flex:1;font-weight:600;font-size:14.5px;">'+esc(c.name)+'</div><button class="link-btn" data-action="cot-remove" data-id="'+esc(c.cottageId)+'" style="color:var(--terra);">Remove</button></div>'; }).join('');
 
@@ -605,7 +722,7 @@
     var gPricing=card('Pricing &amp; timings','Applies to new bookings. Changes take effect immediately.',
           '<div class="gf"><div><label class="field-label">Daily rate (₹)</label><input id="set-rate" class="field" type="number" value="'+esc(s.dayRate||'300')+'"></div>'
         +'<div><label class="field-label">Deposit / week (₹)</label><input id="set-deposit" class="field" type="number" value="'+esc(s.depositPerWeek||'2000')+'"></div>'
-        +'<div><label class="field-label">Late fee / hour (₹)</label><input id="set-late" class="field" type="number" value="'+esc(s.lateFeePerHour||'50')+'"></div>'
+        +'<div><label class="field-label">Late fee / hour (₹)</label><input id="set-late" class="field" type="number" value="'+esc(s.lateFeePerHour||'0')+'"></div>'
         +'<div><label class="field-label">Grace (minutes)</label><input id="set-grace" class="field" type="number" value="'+esc(s.graceMinutes||'30')+'"></div>'
         +'<div><label class="field-label">Desk opens</label><input id="set-start" class="field" type="time" value="'+esc(s.rentalStartTime||'09:00')+'"></div>'
         +'<div><label class="field-label">Return by (late after)</label><input id="set-end" class="field" type="time" value="'+esc(s.rentalEndTime||'21:00')+'"></div></div>'
@@ -614,14 +731,25 @@
     var gCottages=card('Cottages / accommodations','These populate the guest form dropdown.',
           cotRows+'<div style="display:flex;gap:8px;margin-top:14px;"><input id="cot-newname" class="field" placeholder="Add a cottage…"><button class="btn btn-primary" data-action="cot-add" style="padding:12px 18px;">Add</button></div>');
     var gOperatorsList=card('Operators &amp; access','Each operator signs in with their own 6-digit PIN — it identifies who is at the desk. The manager is shown at the top.',
-          opRows+'<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;"><input id="op-newname" class="field" placeholder="New operator name…" style="flex:1;min-width:140px;"><input id="op-newpin" class="field" type="text" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" style="width:120px;"><button class="btn btn-primary" data-action="op-add" style="padding:12px 18px;">Add</button></div>');
+          opRows+'<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center;"><input id="op-newname" class="field" placeholder="New operator name…" style="flex:1;min-width:140px;"><input id="op-newpin" class="field" type="text" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" style="width:120px;"><select id="op-newrole" class="field" style="width:138px;"><option value="Operator">Operator</option><option value="Supervisor">Supervisor</option></select><button class="btn btn-primary" data-action="op-add" style="padding:12px 18px;">Add</button></div>');
     var gAccess=card('Desk access','Manager label shown across the desk.',
           '<div class="gf"><div><label class="field-label">Manager label</label><input id="set-manager" class="field" type="text" value="'+esc(s.managerLabel||'Manager')+'"></div></div>'
         +'<button class="btn btn-primary" data-action="save-access" style="margin-top:16px;">Save</button>');
-    var gPowers=card('Manager powers','Manager-only abilities. Turn these off once your data is settled to lock them down.',
+    var gPowers=card('Manager powers','Manager-only abilities, plus what you grant operators. Turn these off once your data is settled to lock them down.',
           '<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;margin-bottom:12px;"><input id="set-allow-past" type="checkbox" '+(String(s.allowPastBookings||'yes').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Allow adding past (backdated) bookings</label>'
-        +'<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;"><input id="set-allow-delete" type="checkbox" '+(String(s.allowDeleteBookings||'yes').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Allow deleting bookings <span style="font-weight:500;color:var(--muted-2);">(the ledger is always kept)</span></label>'
-        +'<button class="btn btn-primary" data-action="save-powers" style="margin-top:16px;">Save powers</button>');
+        +'<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;margin-bottom:12px;"><input id="set-allow-delete" type="checkbox" '+(String(s.allowDeleteBookings||'no').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Allow deleting bookings <span style="font-weight:500;color:var(--muted-2);">(the ledger is always kept)</span></label>'
+        +'<div style="border-top:1px solid var(--hair);margin:6px 0 12px;padding-top:14px;"><div style="font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;">Grant to operators</div>'
+        +'<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;"><input id="set-allow-op-past" type="checkbox" '+(String(s.allowOperatorPastBookings||'no').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Let operators add past bookings too <span style="font-weight:500;color:var(--muted-2);">(otherwise manager-only)</span></label></div>'
+        +'<button class="btn btn-primary" data-action="save-powers" style="margin-top:6px;">Save powers</button>');
+
+    // Supervisor powers (manager-only) — one shared grant set for all supervisors.
+    var supTog=function(id,key,title,desc){ return '<label style="display:flex;align-items:flex-start;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;margin-bottom:12px;"><input id="'+id+'" type="checkbox" '+(String(s[key]||'no').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;margin-top:2px;flex:none;"><span>'+title+'<span style="display:block;font-weight:500;color:var(--muted-2);font-size:12.5px;">'+desc+'</span></span></label>'; };
+    var gSupPowers=card('Supervisor powers','A Supervisor runs the desk like an operator and gets ONLY what you grant here (shared by all supervisors). They can never relieve cash, settle drawers, manage users, or change pricing.',
+          supTog('set-sup-money','supViewMoney','View Money &amp; Reports','All drawers, passbook, reports &amp; CSV export — read only (no relieve/refund)')
+        +supTog('set-sup-bookings','supViewAllBookings','View all bookings &amp; analytics','Full history and the manager-level Overview / report analytics')
+        +supTog('set-sup-run','supRunBookings','Run bookings extra','Add past (backdated) bookings')
+        +supTog('set-sup-delete','supDeleteBookings','Delete bookings','Soft-delete a booking — also needs “Allow deleting bookings” above')
+        +'<button class="btn btn-primary" data-action="save-sup-powers" style="margin-top:6px;">Save supervisor powers</button>');
 
     var gEmail=card('Confirmation email','Sent to the guest when you confirm a booking (allocate a scooter).',
           '<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;"><input id="set-email-on" type="checkbox" '+(emailOn?'checked':'')+' style="width:18px;height:18px;">Send confirmation emails</label>'
@@ -643,8 +771,9 @@
 
     // Guest-form group = everything riders touch (managers edit; operators just get the link).
     var gGuestForm=(isMgr()?gPricing+gCottages+gEmail:'')+gLink;
-    // Operators group (manager-only): operators list full-width, then access + powers side by side.
-    var gOperators=gOperatorsList+'<div class="set-pair">'+gAccess+gPowers+'</div>';
+    // Operators group (manager-only): operators list full-width, then access + powers
+    // side by side, then the Supervisor-powers grant card full-width beneath.
+    var gOperators=gOperatorsList+'<div class="set-pair">'+gAccess+gPowers+'</div>'+gSupPowers;
 
     var groups={ guestform:gGuestForm, operators:gOperators };
     $('view-settings').innerHTML='<div class="'+animCls()+'">'
@@ -673,7 +802,7 @@
       +'<div class="modal-head"><div><div class="ttl">'+esc(title)+'</div>'+(sub?'<div class="sub">'+esc(sub)+'</div>':'')+'</div><button class="x-btn" data-action="modal-close">✕</button></div>'
       +'<div class="modal-body">'+body+'</div>'+(footer?'<div class="modal-foot">'+footer+'</div>':'')+'</div></div>';
   }
-  function closeModal(){ $('modalRoot').innerHTML=''; }
+  function closeModal(){ $('modalRoot').innerHTML=''; if(A._pendingSync){ A._pendingSync=false; silentRefresh(); } }
 
   // ── New booking (desk quick-entry) ──
   function openNewBooking(){
@@ -706,9 +835,30 @@
     if(!$('nb-consent').checked){ flash('Please confirm the guest accepted the terms.', true); return; }
     var days=window.Sthira.daysInclusive(ci,co);   // server recomputes authoritatively
     var payload={ riderName:name, dlNumber:dl, cottageName:cottage, mobile:mobile, altMobile:'', email:email, checkIn:ci, checkOut:co, days:days, consentAccepted:true, consentAt:new Date().toISOString() };
-    flash('Creating booking…');
-    return call('createPendingBooking',[payload]).then(function(res){ closeModal(); if(res&&res.success){ flash('Booking '+res.bookingId+' created — confirm to assign a scooter.'); A.bTab='pending'; gotoView('bookings'); silentRefresh(); } else flash((res&&res.message)||'Could not create booking.', true); })
-      .catch(function(e){ flash(errMsg(e), true); });
+    var pv=window.Sthira.pricePreview(days, (C.settings&&Number(C.settings.dayRate))||300, (C.settings&&Number(C.settings.depositPerWeek))||2000);
+    var fmtD=function(s){ var p=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(s)); return p?new Date(+p[1],+p[2]-1,+p[3]).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):String(s); };
+    // Optimistic + instant: drop a Pending booking onto the desk NOW with a temporary
+    // id, then persist on the server. The in-flight guard keeps this card on screen if a
+    // background refresh lands before the write commits (the vanishing-booking fix); the
+    // reconcile then swaps in the real server id. On failure the temp card is removed.
+    var tmpId='new-'+Date.now();
+    beginMut();
+    (C.bookings=C.bookings||[]).unshift({ bookingId:tmpId, status:'Pending', riderName:name, dlNumber:dl, cottageName:cottage, mobile:mobile, altMobile:'', email:email, checkIn:fmtD(ci), checkOut:fmtD(co), days:days, vehicleId:'', vehicleLabel:'', rentAmount:pv.rent, depositAmount:pv.deposit, totalAmount:pv.rent+pv.deposit, rentCash:0, rentUPI:0, depositCash:0, depositUPI:0, createdAt:'Just now', operatorBooked:A.operator, _temp:true });
+    if(C.dashboard&&C.dashboard.bookings) C.dashboard.bookings.pending++;
+    closeModal(); A.bTab='today'; gotoView('bookings'); updateChrome();
+    flash('Creating booking…'); setSync(true);
+    return call('createPendingBooking',[payload]).then(function(res){
+      endMut(); setSync(false);
+      if(res&&res.success){ flash('Booking '+res.bookingId+' created — confirm to assign a scooter.'); }
+      else { flash((res&&res.message)||'Could not create booking.', true); C.bookings=(C.bookings||[]).filter(function(x){ return x.bookingId!==tmpId; }); }
+      silentRefresh();
+    }).catch(function(e){
+      endMut(); setSync(false);
+      C.bookings=(C.bookings||[]).filter(function(x){ return x.bookingId!==tmpId; });
+      if(C.dashboard&&C.dashboard.bookings&&C.dashboard.bookings.pending>0) C.dashboard.bookings.pending--;
+      rerenderCurrent(); updateChrome();
+      flash('Couldn’t create the booking — '+errMsg(e)+' Try again.', true);
+    });
   }
 
   // ── Confirm (booking + vehicles from cache → instant open) ──
@@ -733,31 +883,109 @@
     var ctx=window._confirmCtx, b=ctx.b, vehicleId=val('cf-scooter');
     if(!vehicleId){ flash('Assign a scooter.', true); return; }
     var payment={ mode:ctx.method };
-    if(ctx.method==='split'){ var cash=Number(val('cf-cash'))||0, upi=Number(val('cf-upi'))||0; if(Math.round(cash+upi)!==Math.round(b.totalAmount)){ flash('Split must add up to '+inr(b.totalAmount)+'.', true); return; } var rentCash=Math.min(cash,b.rentAmount); payment.rentCash=rentCash; payment.rentUPI=b.rentAmount-rentCash; payment.depositCash=cash-rentCash; payment.depositUPI=b.depositAmount-(cash-rentCash); }
-    flash('Taking payment…');
-    return call('confirmBooking',[b.bookingId, vehicleId, payment, A.operator, A.token]).then(function(res){ closeModal(); var msg=b.riderName+' confirmed on '+(res.vehicleLabel||vehicleId)+' · '+inr(b.totalAmount)+' collected'; if(res.emailSent) msg+=' · email sent'; flash(msg); silentRefresh(); })
-      .catch(function(e){ flash(errMsg(e), true); });
+    var rentCash=0, rentUPI=0, depositCash=0, depositUPI=0;
+    if(ctx.method==='cash'){ rentCash=b.rentAmount; depositCash=b.depositAmount; }
+    else if(ctx.method==='upi'){ rentUPI=b.rentAmount; depositUPI=b.depositAmount; }
+    else { var cash=Number(val('cf-cash'))||0, upi=Number(val('cf-upi'))||0; if(Math.round(cash+upi)!==Math.round(b.totalAmount)){ flash('Split must add up to '+inr(b.totalAmount)+'.', true); return; } rentCash=Math.min(cash,b.rentAmount); rentUPI=b.rentAmount-rentCash; depositCash=cash-rentCash; depositUPI=b.depositAmount-depositCash; payment.rentCash=rentCash; payment.rentUPI=rentUPI; payment.depositCash=depositCash; payment.depositUPI=depositUPI; }
+    var veh=(C.vehicles||[]).filter(function(v){ return v.vehicleId===vehicleId; })[0], vehicleLabel=veh?veh.label:vehicleId;
+    // Optimistic + instant: flip the booking to Active and the scooter to Out NOW and
+    // close the modal, then collect payment on the server in the background. The sync
+    // dot shows the save in flight; a real failure rolls back and re-opens this modal.
+    beginMut();
+    (C.bookings||[]).forEach(function(x){ if(x.bookingId===b.bookingId){ x.status='Active'; x.vehicleId=vehicleId; x.vehicleLabel=vehicleLabel; x.rentCash=rentCash; x.rentUPI=rentUPI; x.depositCash=depositCash; x.depositUPI=depositUPI; x.operatorBooked=A.operator; } });
+    (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===vehicleId){ v.status='Out'; v.activeBooking={ bookingId:b.bookingId, riderName:b.riderName }; } });
+    closeModal(); rerenderCurrent(); updateChrome();
+    flash('Saving booking…'); setSync(true);
+    return call('confirmBooking',[b.bookingId, vehicleId, payment, A.operator, A.token]).then(function(res){
+      endMut(); setSync(false);
+      var msg=b.riderName+' confirmed on '+(res.vehicleLabel||vehicleLabel)+' · '+inr(b.totalAmount)+' collected'; if(res.emailSent) msg+=' · email sent';
+      flash(msg); silentRefresh();
+    }).catch(function(e){
+      endMut(); setSync(false);
+      // Roll back to Pending + free the scooter, tell the operator plainly, re-open confirm.
+      (C.bookings||[]).forEach(function(x){ if(x.bookingId===b.bookingId){ x.status='Pending'; x.vehicleId=''; x.vehicleLabel=''; x.rentCash=0; x.rentUPI=0; x.depositCash=0; x.depositUPI=0; } });
+      (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===vehicleId){ v.status='Available'; v.activeBooking=null; } });
+      rerenderCurrent(); updateChrome();
+      flash('Couldn’t confirm — '+errMsg(e)+' Try again.', true);
+      openConfirm(b.bookingId); silentRefresh();
+    });
   }
 
   // ── Return ──
+  // Late-fee preview computed EXACTLY like the server (Returns.gs processReturn): the
+  // deadline is the check-out date at the configured end time (default 21:00 IST), with a
+  // grace window; the fee is capped so being late never costs more than the extra day(s)'
+  // rent. We build the IST deadline as a UTC instant so it's correct in any browser
+  // timezone. The operator SEES this before settling — there's never a hidden late fee.
+  function lateFeePreview(b){
+    var s=C.settings||{}, ymd=String(b.checkOutYmd||'');
+    var md=/^(\d{4})-(\d{2})-(\d{2})/.exec(ymd);
+    if(!md) return { days:0, lateFee:0 };
+    var tm=/^(\d{1,2}):(\d{2})/.exec(String(s.rentalEndTime||'21:00'))||[null,'21','00'];
+    var deadline=new Date(Date.UTC(+md[1], +md[2]-1, +md[3], (+tm[1])-5, (+tm[2])-30));   // IST end-of-day as UTC
+    var now=new Date();
+    if(now<=deadline) return { days:0, lateFee:0 };
+    var grace=Number(s.graceMinutes||0), diffMin=Math.floor((now-deadline)/60000);
+    if(diffMin<=grace) return { days:0, lateFee:0 };
+    var lateHours=Math.ceil((diffMin-grace)/60);
+    var dayRate=Number(s.dayRate||300), extraDays=Math.ceil(lateHours/24), lateFee;
+    if(String(s.lateFeeMode||'perHour')==='fullExtraDay'){
+      var d=Number(b.days)||1, depPerW=Number(s.depositPerWeek||2000);
+      lateFee=dayRate + (Math.ceil((d+1)/7)-Math.ceil(d/7))*depPerW;
+    } else {
+      // No fallback — late fee defaults to plain 0 (no charge) unless a rate is set.
+      var lfph=Number(s.lateFeePerHour)||0;
+      lateFee=Math.min(lateHours*lfph, extraDays*dayRate);   // capped at the extra day(s)' rent
+    }
+    return { days:extraDays, lateFee:lateFee };
+  }
   function openReturn(bookingId){
     var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
     if(!b){ flash('Booking not found — refreshing.', true); silentRefresh(); return; }
     window._returnCtx={ b:b };
-    var body='<div style="display:flex;gap:11px;align-items:center;background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:13px;padding:13px 15px;margin-bottom:16px;"><span style="font-size:18px;">↩️</span><div style="font-size:13.5px;color:var(--txt-2);">Returning <b>'+esc(b.vehicleLabel||'—')+'</b> · due '+esc(b.checkOut)+'. Late fees (if any) are calculated automatically.</div></div>'
+    var lp=lateFeePreview(b), dep=Number(b.depositAmount)||0;
+    var lateRow=lp.lateFee>0
+      ? '<div class="sr"><span style="color:var(--muted);">Late fee · '+lp.days+' day'+(lp.days>1?'s':'')+' overdue</span><span style="font-weight:600;color:var(--terra);">− '+inr(lp.lateFee)+'</span></div>'
+      : '<div class="sr"><span style="color:var(--muted);">Late fee</span><span style="font-weight:600;color:var(--pine-soft);">on time · ₹0</span></div>';
+    var body='<div style="display:flex;gap:11px;align-items:center;background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:13px;padding:13px 15px;margin-bottom:16px;"><span style="flex:none;color:var(--pine);display:flex;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 5 5v2"/></svg></span><div style="font-size:13.5px;color:var(--txt-2);">Returning <b>'+esc(b.vehicleLabel||'—')+'</b> · due '+esc(b.checkOut)+'.</div></div>'
       +'<label class="field-label">Damage / cleaning deduction (₹)</label><input id="rt-damage" class="field" type="number" min="0" placeholder="0">'
       +'<label class="field-label" style="margin-top:16px;">Condition notes</label><textarea id="rt-note" class="field" rows="2" placeholder="Scratches, battery level, helmet returned…" style="resize:none;"></textarea>'
-      +'<div class="summary" style="background:var(--pine-tint);border-color:var(--pine-line);"><div class="sr"><span style="color:var(--muted);">Deposit held</span><span style="font-weight:600;">'+inr(b.depositAmount)+'</span></div><div class="sr"><span style="color:var(--muted);">Damage / cleaning</span><span id="rt-dmg-lbl" style="font-weight:600;color:var(--terra);">− ₹0</span></div><div class="sr total"><span style="font-weight:600;">Refund before late fee</span><span class="amt" id="rt-refund" style="color:var(--pine);">'+inr(b.depositAmount)+'</span></div></div>';
+      +'<div class="summary" style="background:var(--pine-tint);border-color:var(--pine-line);"><div class="sr"><span style="color:var(--muted);">Deposit held</span><span style="font-weight:600;">'+inr(dep)+'</span></div>'
+      +'<div class="sr"><span style="color:var(--muted);">Damage / cleaning</span><span id="rt-dmg-lbl" style="font-weight:600;color:var(--terra);">− ₹0</span></div>'
+      +lateRow
+      +'<div class="sr total"><span style="font-weight:600;">Refund to guest</span><span class="amt" id="rt-refund" style="color:var(--pine);">'+inr(Math.max(0,dep-lp.lateFee))+'</span></div></div>';
     var footer='<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="rt-submit">Settle &amp; refund</button>';
     openModal('Process return', b.riderName+' · '+(b.vehicleLabel||'—')+' · '+b.bookingId, body, footer);
-    $('rt-damage').oninput=function(){ var dmg=Number(val('rt-damage'))||0; $('rt-dmg-lbl').textContent='− '+inr(dmg); $('rt-refund').textContent=inr(Math.max(0,b.depositAmount-dmg)); };
+    window._returnCtx.lateFee=lp.lateFee;
+    $('rt-damage').oninput=function(){ var dmg=Number(val('rt-damage'))||0; $('rt-dmg-lbl').textContent='− '+inr(dmg); $('rt-refund').textContent=inr(Math.max(0,dep-dmg-lp.lateFee)); };
   }
   function submitReturn(){
     var b=window._returnCtx.b, dmg=Number(val('rt-damage'))||0, note=val('rt-note');
     var returnData={ actualReturn:new Date().toISOString(), refundMode:'same', operatorName:A.operator, notes:note, deductions: dmg>0?[{amount:dmg, reason:'Damage/cleaning'}]:[] };
-    flash('Processing return…');
-    return call('processReturn',[b.bookingId, returnData, A.token]).then(function(res){ closeModal(); var msg=b.riderName+' returned '+(b.vehicleLabel||'')+' · '+inr(res.refundAmount)+' refunded'; if(res.lateFee>0) msg+=' (late fee '+inr(res.lateFee)+')'; flash(msg); silentRefresh(); })
-      .catch(function(e){ flash(errMsg(e), true); });
+    // Optimistic + instant: close the modal and update the desk NOW, then settle on the
+    // server in the background. The little top-right sync dot shows the save is in flight;
+    // a real failure rolls the desk back and re-opens this modal so the operator can settle
+    // again — the return is never silently lost, and the success/failure toast is genuine.
+    var lateFee=Number((window._returnCtx&&window._returnCtx.lateFee)||0);
+    beginMut();
+    (C.bookings||[]).forEach(function(x){ if(x.bookingId===b.bookingId){ x.status='Returned'; x.deductionTotal=dmg; x.lateFee=lateFee; x.refundTotal=Math.max(0,(b.depositAmount||0)-dmg-lateFee); } });
+    (C.vehicles||[]).forEach(function(v){ if(v.activeBooking&&v.activeBooking.bookingId===b.bookingId){ v.status='Available'; v.activeBooking=null; } });
+    closeModal(); rerenderCurrent(); updateChrome();
+    flash('Saving return…'); setSync(true);
+    return call('processReturn',[b.bookingId, returnData, A.token]).then(function(res){
+      endMut(); setSync(false);
+      var msg=b.riderName+' returned '+(b.vehicleLabel||'')+' · '+inr(res.refundAmount)+' refunded'; if(res.lateFee>0) msg+=' (late fee '+inr(res.lateFee)+')';
+      flash(msg); silentRefresh();
+    }).catch(function(e){
+      endMut(); setSync(false);
+      // Roll back to the true (still-Active) state, tell the operator plainly, and re-open
+      // the return so they can try again.
+      (C.bookings||[]).forEach(function(x){ if(x.bookingId===b.bookingId){ x.status='Active'; x.refundTotal=0; x.deductionTotal=0; } });
+      (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===b.vehicleId){ v.status='Out'; v.activeBooking={ bookingId:b.bookingId, riderName:b.riderName }; } });
+      rerenderCurrent(); updateChrome();
+      flash('Couldn’t save the return — '+errMsg(e)+' Try again.', true);
+      openReturn(b.bookingId); silentRefresh();
+    });
   }
 
   // ── Cancel ──
@@ -767,6 +995,112 @@
     window._cancelId=bookingId;
   }
   function submitCancel(){ flash('Cancelling…'); return call('cancelBooking',[window._cancelId, val('cancel-reason')||'Cancelled', A.operator, A.token]).then(function(){ closeModal(); flash('Booking cancelled.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); }); }
+
+  // ── Extend (move the return date later) ──
+  // Recomputes days/rent/deposit on the booking's own snapshot rates and (for an Active
+  // booking) collects the extra now — mirroring the server in extendBooking().
+  function ymdPlus(ymd, n){ var p=String(ymd||'').split('-'); if(p.length!==3) return ''; var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]+n)); return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0'); }
+  function openExtend(bookingId){
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(!b){ flash('Booking not found — refreshing.', true); silentRefresh(); return; }
+    if(b.status!=='Active' && b.status!=='Pending'){ flash('Only an active or pending booking can be extended.', true); return; }
+    if(!b.checkInYmd || !b.checkOutYmd){ flash('This booking is missing its dates — refreshing.', true); silentRefresh(); return; }
+    window._extCtx={ b:b, method:'cash', addRent:0, addDeposit:0, addTotal:0 };
+    var minOut=ymdPlus(b.checkOutYmd,1);
+    var body='<div style="display:flex;gap:11px;align-items:center;background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:13px;padding:13px 15px;margin-bottom:16px;"><span style="flex:none;color:var(--pine);display:flex;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span><div style="font-size:13.5px;color:var(--txt-2);">Currently due <b>'+esc(b.checkOut)+'</b>'+(b.vehicleLabel?' · '+esc(b.vehicleLabel):'')+'. Pick a later return date.</div></div>'
+      +'<label class="field-label">New return date</label><input id="ex-date" class="field" type="date" min="'+minOut+'" value="'+minOut+'">'
+      +'<div class="summary" id="ex-sum"></div>'
+      +'<div id="ex-pay" class="hidden"><div style="margin:18px 0 8px;"><label class="field-label">Collect the extra by</label><div style="display:flex;gap:9px;"><button class="seg on" data-action="ex-method" data-m="cash">Cash</button><button class="seg" data-action="ex-method" data-m="upi">UPI</button><button class="seg" data-action="ex-method" data-m="split">Split</button></div></div>'
+      +'<div id="ex-split" class="hidden"><div class="gf"><div><label class="field-label">Cash (₹)</label><input id="ex-cash" class="field" type="number" placeholder="0"></div><div><label class="field-label">UPI (₹)</label><input id="ex-upi" class="field" type="number" placeholder="0"></div></div><div id="ex-splitnote" style="font-size:12.5px;margin-top:8px;"></div></div></div>'
+      +(b.status==='Pending'?'<div style="font-size:12.5px;color:var(--muted-2);margin-top:12px;">Nothing is collected now — the larger amount is taken when you confirm &amp; hand over.</div>':'');
+    var footer='<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="ex-submit">Extend rental</button>';
+    openModal('Extend rental', b.riderName+' · '+b.bookingId, body, footer);
+    ['ex-cash','ex-upi'].forEach(function(idd){ var el=$(idd); if(el) el.oninput=exSplitNote; });
+    $('ex-date').oninput=exRecalc; exRecalc();
+  }
+  function exRecalc(){
+    var ctx=window._extCtx; if(!ctx) return; var b=ctx.b, newOut=val('ex-date');
+    var dayRate=Number(b.dayRateSnap)||Number((C.settings&&C.settings.dayRate)||300);
+    var depW=Number(b.depositPerWeekSnap)||Number((C.settings&&C.settings.depositPerWeek)||2000);
+    var newDays=window.Sthira.daysInclusive(b.checkInYmd, newOut);
+    var addDays=newDays-(Number(b.days)||1);
+    var newRent=dayRate*newDays, newDeposit=depW*Math.ceil(newDays/7);
+    ctx.addRent=Math.max(0,newRent-(Number(b.rentAmount)||0));
+    ctx.addDeposit=Math.max(0,newDeposit-(Number(b.depositAmount)||0));
+    ctx.addTotal=ctx.addRent+ctx.addDeposit;
+    var valid=newOut && newOut>b.checkOutYmd;
+    var sum=$('ex-sum');
+    if(sum) sum.innerHTML = valid
+      ? '<div class="sr"><span style="color:var(--muted);">Extra days</span><span style="font-weight:600;">+'+addDays+' day'+(addDays===1?'':'s')+'</span></div>'
+        +'<div class="sr"><span style="color:var(--muted);">Extra rent</span><span style="font-weight:600;">'+inr(ctx.addRent)+'</span></div>'
+        +(ctx.addDeposit>0?'<div class="sr"><span style="color:var(--muted);">Extra deposit (held)</span><span style="font-weight:600;">'+inr(ctx.addDeposit)+'</span></div>':'')
+        +'<div class="sr total"><span style="font-weight:600;">'+(b.status==='Active'?'To collect now':'Added to total')+'</span><span class="amt">'+inr(ctx.addTotal)+'</span></div>'
+      : '<div class="sr"><span style="color:var(--terra);">Pick a date later than '+esc(b.checkOut)+'.</span></div>';
+    var pay=$('ex-pay'); if(pay) pay.classList.toggle('hidden', !(b.status==='Active' && valid && ctx.addTotal>0));
+    exSplitNote();
+  }
+  function exMethod(m){ window._extCtx.method=m; Array.prototype.forEach.call(document.querySelectorAll('[data-action="ex-method"]'), function(btn){ btn.classList.toggle('on', btn.getAttribute('data-m')===m); }); $('ex-split').classList.toggle('hidden', m!=='split'); exSplitNote(); }
+  function exSplitNote(){ var ctx=window._extCtx; if(!ctx||ctx.method!=='split') return; var note=$('ex-splitnote'); if(!note) return; var cash=Number(val('ex-cash'))||0, upi=Number(val('ex-upi'))||0, rem=ctx.addTotal-cash-upi; if(rem===0){ note.textContent='✓ Split balances exactly'; note.style.color='var(--pine-soft)'; } else if(rem>0){ note.textContent=inr(rem)+' still to allocate'; note.style.color='var(--terra)'; } else { note.textContent=inr(-rem)+' over total'; note.style.color='var(--terra)'; } }
+  function submitExtend(){
+    var ctx=window._extCtx, b=ctx.b, newOut=val('ex-date');
+    if(!newOut || newOut<=b.checkOutYmd){ flash('Pick a date later than the current return date.', true); return; }
+    var payment=null;
+    if(b.status==='Active' && ctx.addTotal>0){
+      var m=ctx.method||'cash'; payment={ mode:m };
+      if(m==='split'){
+        var cash=Number(val('ex-cash'))||0, upi=Number(val('ex-upi'))||0;
+        if(Math.round(cash+upi)!==Math.round(ctx.addTotal)){ flash('Split must add up to '+inr(ctx.addTotal)+'.', true); return; }
+        var rc=Math.min(cash,ctx.addRent); payment.rentCash=rc; payment.rentUPI=ctx.addRent-rc; payment.depositCash=cash-rc; payment.depositUPI=ctx.addDeposit-(cash-rc);
+      }
+    }
+    flash('Extending…');
+    return call('extendBooking',[b.bookingId, newOut, payment, A.token]).then(function(res){
+      closeModal();
+      var pretty; try{ pretty=new Date(res.checkOut+'T12:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }catch(e){ pretty=res.checkOut; }
+      flash(b.riderName+' extended to '+pretty+(res.addTotal>0?' · '+inr(res.addTotal)+' collected':''));
+      silentRefresh();
+    }).catch(function(e){ flash(errMsg(e), true); });
+  }
+
+  // ── Edit a booking ──
+  // Pending: fix details + dates (recomputes the estimate; payment is taken at confirm).
+  // Active: fix guest details only — length/money changes go through Extend / Process return.
+  function openEditBooking(bookingId){
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(!b){ flash('Booking not found — refreshing.', true); silentRefresh(); return; }
+    if(b.status!=='Pending' && b.status!=='Active'){ flash('Only a pending or active booking can be edited.', true); return; }
+    window._editId=bookingId; window._editStatus=b.status;
+    var copts='<option value="">Select…</option>'+(C.cottages||[]).map(function(c){ return '<option'+(c.name===b.cottageName?' selected':'')+'>'+esc(c.name)+'</option>'; }).join('');
+    var datesHtml = b.status==='Pending'
+      ? '<div><label class="field-label">Check-in</label><input id="eb-checkin" class="field" type="date" value="'+esc(b.checkInYmd||'')+'"></div>'
+        +'<div><label class="field-label">Check-out</label><input id="eb-checkout" class="field" type="date" value="'+esc(b.checkOutYmd||'')+'" min="'+esc(b.checkInYmd||'')+'"></div>'
+      : '';
+    var body='<div class="gf">'
+      +'<div class="full"><label class="field-label">Guest name *</label><input id="eb-name" class="field" value="'+esc(b.riderName)+'"></div>'
+      +'<div><label class="field-label">Mobile</label><input id="eb-mobile" class="field" type="tel" value="'+esc(b.mobile)+'"></div>'
+      +'<div><label class="field-label">Alt. mobile</label><input id="eb-alt" class="field" type="tel" value="'+esc(b.altMobile||'')+'"></div>'
+      +'<div><label class="field-label">Cottage</label><select id="eb-cottage" class="field">'+copts+'</select></div>'
+      +'<div><label class="field-label">Email</label><input id="eb-email" class="field" type="email" value="'+esc(b.email||'')+'"></div>'
+      +'<div class="full"><label class="field-label">Driving licence</label><input id="eb-dl" class="field" value="'+esc(b.dlNumber||'')+'"></div>'
+      +datesHtml+'</div>'
+      +(b.status==='Pending'
+        ? '<div class="summary"><div class="sr"><span style="color:var(--muted);">New estimate</span><span id="eb-est" style="font-weight:600;">—</span></div></div>'
+        : '<div style="font-size:12.5px;color:var(--muted-2);margin-top:14px;">Dates aren’t edited here on an active rental (the deposit is held). To change its length use <b>Extend</b> (more days) or <b>Process return</b> (early) — that keeps the cash exact.</div>');
+    var footer='<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="eb-submit">Save changes</button>';
+    openModal('Edit booking', b.riderName+' · '+b.bookingId, body, footer);
+    if(b.status==='Pending'){
+      var rc=function(){ var p=window.Sthira.pricePreview(window.Sthira.daysInclusive($('eb-checkin').value,$('eb-checkout').value),(C.settings&&C.settings.dayRate)||300,(C.settings&&C.settings.depositPerWeek)||2000); $('eb-est').textContent=p.days+'d · '+inr(p.rent)+' rent + '+inr(p.deposit)+' deposit = '+inr(p.rent+p.deposit); };
+      $('eb-checkin').onchange=function(){ if($('eb-checkout').value<$('eb-checkin').value) $('eb-checkout').value=$('eb-checkin').value; rc(); };
+      $('eb-checkout').onchange=rc; rc();
+    }
+  }
+  function submitEditBooking(){
+    var name=val('eb-name'); if(!name){ flash('Guest name is required.', true); return; }
+    var data={ riderName:name, mobile:val('eb-mobile'), altMobile:val('eb-alt'), cottageName:val('eb-cottage'), email:val('eb-email'), dlNumber:val('eb-dl') };
+    if(window._editStatus==='Pending'){ data.checkIn=val('eb-checkin'); data.checkOut=val('eb-checkout'); }
+    flash('Saving changes…');
+    return call('editBooking',[window._editId, data, A.token]).then(function(){ closeModal(); flash('Booking updated.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); });
+  }
 
   // ── Handover ──
   function openHandover(){
@@ -820,6 +1154,35 @@
     window._rlCash=cash;
   }
   function submitRelieve(){ var amt=Number(val('rl-amt'))||0; if(amt<=0){ flash('Enter an amount.', true); return; } if(amt>window._rlCash+1){ flash('Cannot exceed cash on hand.', true); return; } flash('Relieving…'); return call('recordRelieve',[amt, val('rl-note'), A.token]).then(function(){ closeModal(); flash(inr(amt)+' relieved to company.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); }); }
+  // ── Day close-out (manager-only) — a read-only end-of-day summary from cache.
+  // No money logic here: it derives the numbers from C and hands off to the existing
+  // audit + relieve flows for the only two mutations.
+  function openDayCloseout(){
+    if(!isMgr()) return;
+    var acc=(C.dashboard&&C.dashboard.accounting)||{}, today=(C.dashboard&&C.dashboard.today)||{}, dr=C.drawers||{}, pend=(C.pendingHandovers||[]);
+    var biz=(today.todayTotal!=null?today.todayTotal:((today.todayCashIn||0)+(today.todayUPIIn||0)));
+    var row=function(label, value, detail){
+      return '<div class="sr" style="align-items:baseline;"><span style="color:var(--muted);">'+esc(label)+(detail?' <span style="color:var(--faint);font-size:11.5px;">'+detail+'</span>':'')+'</span><span style="font-weight:600;">'+esc(value)+'</span></div>';
+    };
+    var mix=function(c,u){ return 'cash '+inr(c)+' · UPI '+inr(u); };
+    // Per-drawer cash breakdown (manager + operators), straight from C.drawers.
+    var drawerRows=(dr.manager?'<div class="led-row"><div class="av" style="width:32px;height:32px;">'+esc(initials(dr.manager.name))+'</div><div style="flex:1;min-width:0;"><div class="nm">'+esc(dr.manager.name)+' <span class="pill pill-pine" style="padding:1px 8px;font-size:10.5px;">manager</span></div></div><div style="font-family:var(--serif);font-size:17px;font-weight:500;">'+inr(dr.manager.balance)+'</div></div>':'')
+      +((dr.operators||[]).length?(dr.operators||[]).map(function(o){ return '<div class="led-row"><div class="av" style="width:32px;height:32px;">'+esc(initials(o.name))+'</div><div style="flex:1;min-width:0;"><div class="nm">'+esc(o.name)+'</div></div><div style="font-family:var(--serif);font-size:17px;font-weight:500;">'+inr(o.balance)+'</div></div>'; }).join(''):'');
+    var pendWarn=pend.length
+      ? '<div style="background:var(--gold-tint);border:1px solid var(--gold);border-radius:12px;padding:11px 14px;font-size:12.5px;color:var(--gold-deep);margin-bottom:14px;"><b>'+pend.length+' transfer'+(pend.length>1?'s':'')+' awaiting verification.</b> Settle these before you close the day so every drawer is correct.</div>'
+      : '<div style="background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:12px;padding:11px 14px;font-size:12.5px;color:var(--pine);margin-bottom:14px;">No transfers waiting. Drawers are settled. 🌿</div>';
+    var body=pendWarn
+      +'<div class="summary"><div style="font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:4px;">Today</div>'
+      +row('Total business today', inr(biz), mix(today.todayCashIn||0, today.todayUPIIn||0))
+      +row('Deposits held', inr(acc.depositHeldTotal||0), mix(acc.depositHeldCash||0, acc.depositHeldUPI||0))
+      +'</div>'
+      +'<div class="summary" style="margin-top:14px;"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><span style="font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);">Cash in hand</span><span style="font-family:var(--serif);font-size:18px;font-weight:500;color:var(--pine);">'+inr(acc.cashInHand||0)+'</span></div>'
+      +(drawerRows||'<div class="empty" style="padding:10px 0;">No drawers yet.</div>')+'</div>';
+    var footer='<button class="btn-ghost-lg" data-action="modal-close">Close</button>'
+      +'<button class="btn-ghost-lg" data-action="closeout-audit">Run audit</button>'
+      +'<button class="btn-lg" data-action="closeout-relieve">Relieve all to company</button>';
+    openModal('Day close-out', todayStr()+' · end-of-day summary', body, footer);
+  }
   // ── Self-audit (verify/fail + what changed where) ──
   function runAudit(){
     flash('Running self-audit…');
@@ -849,7 +1212,7 @@
       +'<div style="margin:16px 0 8px;"><label class="field-label">How was it paid?</label><div style="display:flex;gap:9px;"><button class="seg on" data-action="pb-method" data-m="cash">Cash</button><button class="seg" data-action="pb-method" data-m="upi">UPI</button><button class="seg" data-action="pb-method" data-m="split">Split</button></div></div>'
       +'<div id="pb-split" class="hidden"><div class="gf"><div><label class="field-label">Cash (₹)</label><input id="pb-cash" class="field" type="number" placeholder="0"></div><div><label class="field-label">UPI (₹)</label><input id="pb-upi" class="field" type="number" placeholder="0"></div></div></div>'
       +'<div class="summary"><div class="sr"><span style="color:var(--muted);">Estimate</span><span id="pb-est">—</span></div></div>';
-    openModal('Add past booking','Manager · historical record', body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="pb-submit">Add record</button>');
+    openModal('Add past booking','Historical record', body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="pb-submit">Add record</button>');
     function recalc(){ var p=window.Sthira.pricePreview(window.Sthira.daysInclusive($('pb-checkin').value,$('pb-checkout').value),(C.settings&&C.settings.dayRate)||300,(C.settings&&C.settings.depositPerWeek)||2000); window._pbPrice=p; $('pb-est').textContent=p.days+'d · '+inr(p.rent)+' rent + '+inr(p.deposit)+' deposit = '+inr(p.rent+p.deposit); }
     $('pb-checkin').onchange=function(){ if($('pb-checkout').value<$('pb-checkin').value) $('pb-checkout').value=$('pb-checkin').value; recalc(); };
     $('pb-checkout').onchange=recalc; recalc();
@@ -874,7 +1237,7 @@
   }
   function submitDeleteBooking(){ flash('Deleting…'); return call('deleteBooking',[window._delId, A.token]).then(function(res){ closeModal(); flash('Record deleted · '+(res.riderName||'')); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); }); }
   function settingsSetEmail(id){ var em=val('op-email-'+id); flash('Saving…'); return call('setOperatorEmail',[id, em, A.token]).then(function(){ flash('Email saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
-  function savePowers(){ var u={ allowPastBookings:$('set-allow-past').checked?'yes':'no', allowDeleteBookings:$('set-allow-delete').checked?'yes':'no' }; C.settings.allowPastBookings=u.allowPastBookings; C.settings.allowDeleteBookings=u.allowDeleteBookings; flash('Saving…'); return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Manager powers saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+  function savePowers(){ var u={ allowPastBookings:$('set-allow-past').checked?'yes':'no', allowDeleteBookings:$('set-allow-delete').checked?'yes':'no', allowOperatorPastBookings:$('set-allow-op-past').checked?'yes':'no' }; C.settings.allowPastBookings=u.allowPastBookings; C.settings.allowDeleteBookings=u.allowDeleteBookings; C.settings.allowOperatorPastBookings=u.allowOperatorPastBookings; flash('Saving…'); return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Manager powers saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
 
   // ── Add vehicle ──
   function openAddVehicle(){
@@ -905,11 +1268,71 @@
       +detailSection('Handled by',[ detailRow('Booked by', b.operatorBooked), detailRow('Terms accepted', b.consentAt), detailRow('Returned by', b.operatorReturned), detailRow('Returned at', b.actualReturn), detailRow('Notes', b.returnNotes) ]);
     var idA=esc(b.bookingId);
     if(b.status==='Deleted') body='<div style="background:var(--terra-tint);border:1px solid var(--terra);border-radius:12px;padding:11px 14px;font-size:13px;color:var(--terra);font-weight:600;margin-bottom:14px;">'+esc(b.returnNotes||('Record deleted · '+b.riderName))+'. The money remains in the ledger.</div>'+body;
-    var footer='<button class="btn-ghost-lg" data-action="modal-close">Close</button>';
-    if(b.status==='Pending'){ footer+='<button class="btn-ghost-lg" data-action="cn-from-details" data-id="'+idA+'" style="color:var(--terra);">Cancel</button><button class="btn-lg" data-action="cf-from-details" data-id="'+idA+'">Confirm booking</button>'; }
-    else if(b.status==='Active'){ footer+='<button class="btn-ghost-lg" data-action="cn-from-details" data-id="'+idA+'" style="color:var(--terra);">Cancel</button><button class="btn-lg" data-action="rt-from-details" data-id="'+idA+'">Process return</button>'; }
-    if(isMgr() && b.status!=='Deleted'){ footer+='<button class="btn-ghost-lg" data-action="bk-delete" data-id="'+idA+'" style="color:var(--terra);">Delete</button>'; }
+    // Footer is built in deliberate order: destructive actions on the left, the single
+    // primary action on the right — no duplicate Close (the top ✕ and tapping outside both
+    // close). Compact secondary buttons keep it from becoming a wall of fat buttons.
+    var I_PRINT='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>';
+    var I_EXT='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M15 15l2 2-2 2"/></svg>';
+    var I_TRASH='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
+    var I_EDIT='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+    var left='', right='', primary='';
+    // Left = modify/destructive actions (Delete, Edit, Cancel). Right = workflow
+    // (Print, Extend) ending in the single primary. Delete is manager-only AND gated
+    // by the Settings power. Edit/Cancel only make sense while a booking is live.
+    var canDelete=can('supDeleteBookings') && b.status!=='Deleted' && String((C.settings&&C.settings.allowDeleteBookings)||'').toLowerCase()==='yes';
+    if(canDelete) left+='<button class="sec danger" data-action="bk-delete" data-id="'+idA+'">'+I_TRASH+'Delete</button>';
+    if(b.status==='Pending' || b.status==='Active') left+='<button class="sec" data-action="ed-from-details" data-id="'+idA+'">'+I_EDIT+'Edit</button>';
+    if(b.status==='Pending'){
+      left+='<button class="sec danger" data-action="cn-from-details" data-id="'+idA+'">Cancel</button>';
+      primary='<button class="pri" data-action="cf-from-details" data-id="'+idA+'">Confirm booking</button>';
+    } else if(b.status==='Active'){
+      left+='<button class="sec danger" data-action="cn-from-details" data-id="'+idA+'">Cancel</button>';
+      right+='<button class="sec" data-action="bk-receipt" data-id="'+idA+'">'+I_PRINT+'Print receipt</button>';
+      right+='<button class="sec" data-action="ex-from-details" data-id="'+idA+'">'+I_EXT+'Extend</button>';
+      primary='<button class="pri" data-action="rt-from-details" data-id="'+idA+'">Process return</button>';
+    } else if(b.status==='Returned'){
+      right+='<button class="sec" data-action="bk-receipt" data-id="'+idA+'">'+I_PRINT+'Print receipt</button>';
+    }
+    var footer=(left||right||primary)?('<div class="bk-foot">'+left+'<span class="sp"></span>'+right+primary+'</div>'):'';
     openModal('Booking details', b.cottageName||b.riderName, body, footer);
+  }
+  // Printable deposit/refund receipt — builds a self-contained .print-receipt block,
+  // appends it to <body>, prints ONLY it via @media print, then cleans up on afterprint.
+  function printReceipt(bookingId){
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(!b){ flash('Booking not found — refreshing.', true); silentRefresh(); return; }
+    var hasCash=((b.rentCash||0)+(b.depositCash||0))>0, hasUPI=((b.rentUPI||0)+(b.depositUPI||0))>0;
+    var payMode=(hasCash&&hasUPI)?'Cash + UPI':(hasUPI?'UPI':(hasCash?'Cash':'—'));
+    var returned=(b.status==='Returned');
+    var rent=Number(b.rentAmount)||0, dep=Number(b.depositAmount)||0;
+    var lateFee=Number(b.lateFee)||0, ded=Number(b.deductionTotal)||0, refund=Number(b.refundTotal)||0;
+    function line(label, value, opt){ return '<div class="pr-line'+(opt&&opt.total?' pr-total':'')+(opt&&opt.minus?' pr-minus':'')+'"><span>'+esc(label)+'</span><span>'+esc(value)+'</span></div>'; }
+    var rows=line('Rent', inr(rent))+line('Deposit held', inr(dep))+line('Total collected', inr(rent+dep), {total:true});
+    if(returned){
+      rows+='<div class="pr-rule"></div>';
+      if(lateFee>0) rows+=line('Late fee', '− '+inr(lateFee), {minus:true});
+      if(ded>0) rows+=line('Deductions', '− '+inr(ded), {minus:true});
+      rows+=line('Deposit held', inr(dep))
+        +line('Refund paid to guest', inr(refund), {total:true});
+    }
+    var meta=[['Booking', b.bookingId], ['Guest', b.riderName], ['Cottage / stay', b.cottageName||'—'],
+      ['Scooter', b.vehicleLabel||'—'], ['Check-in', b.checkIn||'—'], ['Return by', b.checkOut||'—'],
+      ['Payment mode', payMode]];
+    if(returned && b.actualReturn) meta.push(['Returned at', b.actualReturn]);
+    var metaHtml=meta.map(function(m){ return '<div class="pr-meta-row"><span>'+esc(m[0])+'</span><span>'+esc(m[1])+'</span></div>'; }).join('');
+    var host=document.createElement('div');
+    host.className='print-receipt';
+    host.innerHTML='<div class="pr-head"><div class="pr-brand">Sthira</div><div class="pr-sub">EV Rental · Receipt</div></div>'
+      +'<div class="pr-meta">'+metaHtml+'</div>'
+      +'<div class="pr-money">'+rows+'</div>'
+      +'<div class="pr-foot">Printed '+esc(todayStr())+' · '+esc(returned?'Returned & settled':'Active rental')+'. Thank you for riding with Sthira.</div>';
+    document.body.appendChild(host);
+    document.body.classList.add('printing');
+    function cleanup(){ document.body.classList.remove('printing'); if(host&&host.parentNode) host.parentNode.removeChild(host); window.removeEventListener('afterprint', cleanup); }
+    window.addEventListener('afterprint', cleanup);
+    window.print();
+    // Safety net for browsers that don't fire afterprint reliably.
+    setTimeout(function(){ if(document.body.classList.contains('printing')) cleanup(); }, 1500);
   }
   function openOccupantBooking(vehicleId){
     var b=(C.bookings||[]).filter(function(x){return x.vehicleId===vehicleId && x.status==='Active';})[0];
@@ -941,14 +1364,14 @@
 
   // ════════ OPTIMISTIC LIGHT MUTATIONS ════════
   function vehToggle(id, status){
-    A.mutateEpoch++;
+    beginMut();
     (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===id) v.status=status; }); renderFleet(); flash('Scooter updated.');
-    call('setVehicleStatus',[id, status, A.token]).then(function(){ silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); silentRefresh(); });
+    call('setVehicleStatus',[id, status, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
   }
   function vehDelete(id){
-    A.mutateEpoch++;
+    beginMut();
     C.vehicles=(C.vehicles||[]).filter(function(v){ return v.vehicleId!==id; }); renderFleet(); flash('Scooter removed.');
-    call('deleteVehicle',[id, A.token]).then(function(){ silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); silentRefresh(); });
+    call('deleteVehicle',[id, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
   }
   // Edit a vehicle (label / type / status / notes) — also "allocate to staff".
   function openEditVehicle(id){
@@ -974,14 +1397,47 @@
   }
   function settingsAddOperator(){
     var nm=val('op-newname'), pin=val('op-newpin').replace(/\D/g,'');
+    var role=(val('op-newrole')==='Supervisor')?'Supervisor':'Operator';
     if(!nm){ flash('Enter the operator name.', true); return; }
     if(pin.length!==6){ flash('Set a 6-digit PIN for the operator.', true); return; }
     A.mutateEpoch++;
-    C.operators=(C.operators||[]).concat([{ operatorId:'tmp', name:nm, role:'Operator', active:true }]); renderSettings(); flash('Saving…');
-    return call('addOperator',[nm, pin, 'Operator', A.token]).then(function(){ flash(nm+' added.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+    C.operators=(C.operators||[]).concat([{ operatorId:'tmp', name:nm, role:role, active:true }]); renderSettings(); flash('Saving…');
+    return call('addOperator',[nm, pin, role, A.token]).then(function(){ flash(nm+' added'+(role==='Supervisor'?' as supervisor.':'.')); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
+  function settingsSetRole(id, role){
+    var safe=(role==='Supervisor')?'Supervisor':'Operator';
+    (C.operators||[]).forEach(function(o){ if(o.operatorId===id) o.role=safe; }); renderSettings(); flash('Saving…');
+    return call('setOperatorRole',[id, safe, A.token]).then(function(){ flash('Role updated to '+safe+'.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
+  function saveSupPowers(){
+    var u={ supViewMoney:$('set-sup-money').checked?'yes':'no', supViewAllBookings:$('set-sup-bookings').checked?'yes':'no', supRunBookings:$('set-sup-run').checked?'yes':'no', supDeleteBookings:$('set-sup-delete').checked?'yes':'no' };
+    Object.keys(u).forEach(function(k){ C.settings[k]=u[k]; }); flash('Saving…');
+    return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Supervisor powers saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
   }
   function settingsSetPin(id){ var pin=val('op-pin-'+id).replace(/\D/g,''); if(pin.length!==6){ flash('PIN must be 6 digits.', true); return; } var inp=$('op-pin-'+id); if(inp) inp.value=''; flash('Saving…'); return call('setOperatorPin',[id, pin, A.token]).then(function(){ flash('PIN updated.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
-  function settingsRemoveOperator(id){ C.operators=(C.operators||[]).filter(function(o){ return o.operatorId!==id; }); renderSettings(); flash('Removing…'); return call('deactivateOperator',[id, A.token]).then(function(){ flash('Operator removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+  // Remove a user — cash-safe. If they still hold cash, the manager must choose how to
+  // settle their drawer first (the server recomputes the balance authoritatively).
+  function settingsRemoveOperator(id){
+    var op=(C.operators||[]).filter(function(o){ return o.operatorId===id; })[0];
+    var nm=op?op.name:'';
+    var bal=0; ((C.drawers&&C.drawers.operators)||[]).forEach(function(o){ if(o.name===nm) bal=o.balance||0; });
+    if(bal>0.5){ openRemoveSettle(id, nm, bal); return; }
+    doRemoveOperator(id, '', nm);
+  }
+  function doRemoveOperator(id, settleMode, nm){
+    C.operators=(C.operators||[]).filter(function(o){ return o.operatorId!==id; }); renderSettings(); flash('Removing…');
+    return call('removeOperator',[id, settleMode, A.token]).then(function(){ flash((nm||'Operator')+' removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
+  function openRemoveSettle(id, nm, bal){
+    window._rmId=id; window._rmNm=nm;
+    var mgrLabel=(C.settings&&C.settings.managerLabel)||(C.dashboard&&C.dashboard.managerLabel)||'Manager';
+    var body='<p style="font-size:14px;color:var(--muted);margin:0 0 14px;"><b>'+esc(nm)+'</b> still holds <b>'+inr(bal)+'</b> in their drawer. Settle it before removing — the ledger keeps every past entry; this only appends the settlement (who did it &amp; whose drawer).</p>'
+      +'<div style="display:flex;flex-direction:column;gap:10px;">'
+      +'<button class="btn" data-action="rm-absorb" style="text-align:left;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:13px 16px;border-radius:12px;">Move to '+esc(mgrLabel)+'’s drawer<span style="display:block;font-weight:500;color:var(--muted-2);font-size:12.5px;">Internal transfer — total cash on hand is unchanged.</span></button>'
+      +'<button class="btn" data-action="rm-relieve" style="text-align:left;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:13px 16px;border-radius:12px;">Relieve to company<span style="display:block;font-weight:500;color:var(--muted-2);font-size:12.5px;">Cash leaves the desk — total cash on hand drops by '+inr(bal)+'.</span></button>'
+      +'</div>';
+    openModal('Remove '+nm, 'Settle their drawer first', body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button>');
+  }
   function settingsAddCottage(){ var nm=val('cot-newname'); if(!nm) return; C.cottages=(C.cottages||[]).concat([{ cottageId:'tmp', name:nm, active:true }]); renderSettings(); flash('Saving…'); return call('addCottage',[nm, A.token]).then(function(){ flash(nm+' added.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
   function settingsRemoveCottage(id){ C.cottages=(C.cottages||[]).filter(function(c){ return c.cottageId!==id; }); renderSettings(); flash('Removing…'); return call('deactivateCottage',[id, A.token]).then(function(){ flash('Cottage removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
 
@@ -999,15 +1455,19 @@
       case 'modal-close': closeModal(); break;
       case 'goto': gotoView(t.getAttribute('data-view')); break;
       case 'btab': A.bTab=t.getAttribute('data-tab'); A.search=''; renderBookings(); break;
+      case 'bk-filters-toggle': toggleFilters(); break;
+      case 'bk-filter-clear': clearBookingFilters(); break;
       case 'period': A.period=t.getAttribute('data-p'); renderReports(); break;
       case 'settab': A.setTab=t.getAttribute('data-t'); renderSettings(); break;
-      case 'confirm': openConfirm(id); break;
-      case 'return': openReturn(id); break;
-      case 'cancel': openCancel(id); break;
       case 'bk-details': openBookingDetails(id); break;
       case 'cf-from-details': closeModal(); openConfirm(id); break;
       case 'rt-from-details': closeModal(); openReturn(id); break;
       case 'cn-from-details': closeModal(); openCancel(id); break;
+      case 'ex-from-details': closeModal(); openExtend(id); break;
+      case 'ex-method': exMethod(t.getAttribute('data-m')); break;
+      case 'ex-submit': withBtn(t, submitExtend()); break;
+      case 'ed-from-details': closeModal(); openEditBooking(id); break;
+      case 'eb-submit': withBtn(t, submitEditBooking()); break;
       case 'veh-occupant': openOccupantBooking(id); break;
       case 'cancel-submit': withBtn(t, submitCancel()); break;
       case 'handover': openHandover(); break;
@@ -1032,6 +1492,10 @@
       case 'rl-all': $('rl-amt').value=window._rlCash; break;
       case 'rl-submit': withBtn(t, submitRelieve()); break;
       case 'run-audit': withBtn(t, runAudit()); break;
+      case 'day-closeout': openDayCloseout(); break;
+      case 'closeout-audit': withBtn(t, runAudit()); break;
+      case 'closeout-relieve': closeModal(); openRelieve(); break;
+      case 'bk-receipt': printReceipt(id); break;
       case 'money-drill': openMoneyDrill(t.getAttribute('data-drill')); break;
       case 'add-past-booking': openAddPastBooking(); break;
       case 'pb-method': pbMethod(t.getAttribute('data-m')); break;
@@ -1043,6 +1507,10 @@
       case 'export-csv': exportCSV(); break;
       case 'op-setemail': withBtn(t, settingsSetEmail(id)); break;
       case 'save-powers': withBtn(t, savePowers()); break;
+      case 'save-sup-powers': withBtn(t, saveSupPowers()); break;
+      case 'op-setrole': settingsSetRole(id, t.getAttribute('data-role')); break;
+      case 'rm-absorb': closeModal(); withBtn(t, doRemoveOperator(window._rmId, 'absorb', window._rmNm)); break;
+      case 'rm-relieve': closeModal(); withBtn(t, doRemoveOperator(window._rmId, 'relieve', window._rmNm)); break;
       case 'nb-submit': withBtn(t, submitNewBooking()); break;
       case 'cf-method': cfMethod(t.getAttribute('data-m')); break;
       case 'cf-submit': withBtn(t, submitConfirm()); break;

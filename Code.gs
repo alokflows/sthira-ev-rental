@@ -320,6 +320,28 @@ function _requireManager(token) {
   if (!_isManager(token)) throw new Error('Manager access required for this action.');
 }
 
+// True when the current token belongs to a Supervisor — a trusted deputy who gets
+// ONLY the powers the manager has granted globally (the sup* Settings toggles).
+function _isSupervisor(token) {
+  return _opRole(token) === 'Supervisor';
+}
+
+// Does this token hold a delegable power? A manager always does. A supervisor does
+// only when the named global power (a sup* Setting) is turned on. Operators never do.
+// The grant set is shared across all supervisors (one toggle set in Settings).
+function _hasPower(token, settingKey) {
+  if (_isManager(token)) return true;
+  return _isSupervisor(token) &&
+         String(getSettingValue(settingKey) || 'no').toLowerCase() === 'yes';
+}
+
+// Gate for an action that the manager MAY delegate to a granted supervisor. The
+// never-delegable money/role actions stay on _requireManager — never on this.
+function _requirePower(token, settingKey) {
+  requireAdmin(token);
+  if (!_hasPower(token, settingKey)) throw new Error('You do not have permission for this action.');
+}
+
 function verifyAdminToken(token) {
   if (!token) return false;
   return CacheService.getScriptCache().get('adminToken_' + token) === 'valid';

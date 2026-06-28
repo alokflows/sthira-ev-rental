@@ -12,15 +12,27 @@ function _sanitizeCell(v) {
   return /^[=+\-@\t\r\n]/.test(s) ? "'" + s : s;
 }
 
-// Booking id = DDMMYY-N (e.g. 220626-1), N resets each day.
+// Highest trailing sequence number among ids of the form DDMMYY-N for the given
+// day (0 if none). Scans ALL rows — including Deleted/Cancelled — so a hard-deleted
+// or out-of-band-imported row can never let the next id reuse an existing one.
+function _maxBookingSeq(ddmmyy) {
+  const data = _getBookingsSheet().getDataRange().getValues();
+  let max = 0;
+  for (let i = 1; i < data.length; i++) {
+    const id = String(data[i][BC.BOOKING_ID] || '');
+    if (id.indexOf(ddmmyy + '-') !== 0) continue;
+    // id is DDMMYY-N; the prefix DDMMYY has no '-', so the sequence is after the first '-'.
+    const n = parseInt(id.substring(id.indexOf('-') + 1), 10);
+    if (!isNaN(n) && n > max) max = n;
+  }
+  return max;
+}
+
+// Booking id = DDMMYY-N (e.g. 220626-1), N resets each day. N = max existing
+// sequence + 1 (high-water mark, not a row count) so deletes/imports never collide.
 function _generateBookingId() {
   const ddmmyy = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'ddMMyy');
-  const data = _getBookingsSheet().getDataRange().getValues();
-  let count = 0;
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][BC.BOOKING_ID] || '').indexOf(ddmmyy + '-') === 0) count++;
-  }
-  return ddmmyy + '-' + (count + 1);
+  return ddmmyy + '-' + (_maxBookingSeq(ddmmyy) + 1);
 }
 
 function _formatIST(date) {
@@ -48,7 +60,9 @@ function _rowToBooking(row) {
     mobile:          String(row[BC.MOBILE]),
     altMobile:       String(row[BC.ALT_MOBILE] || ''),
     checkIn:         _formatDateIST(row[BC.CHECK_IN]),
+    checkInYmd:      _ymd(row[BC.CHECK_IN]),    // machine-readable; lets the desk recompute days when extending
     checkOut:        _formatDateIST(row[BC.CHECK_OUT]),
+    checkOutYmd:     _ymd(row[BC.CHECK_OUT]),   // machine-readable; lets the desk preview the late fee exactly as the server computes it
     days:            Number(row[BC.DAYS]) || 0,
     vehicleId:       String(row[BC.VEHICLE_ID] || ''),
     vehicleLabel:    String(row[BC.VEHICLE_LABEL] || ''),
@@ -165,6 +179,7 @@ function confirmBooking(bookingId, vehicleId, payment, operatorName, token) {
   const lock = LockService.getScriptLock();
   try { lock.waitLock(10000); }
   catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  let result;
   try {
     const sheet   = _getBookingsSheet();
     const data    = sheet.getDataRange().getValues();
@@ -203,6 +218,9 @@ function confirmBooking(bookingId, vehicleId, payment, operatorName, token) {
       rentUPI     = Number(payment.rentUPI)     || 0;
       depositCash = Number(payment.depositCash) || 0;
       depositUPI  = Number(payment.depositUPI)  || 0;
+      // Reject negative parts: they'd pass the sum check (−500 + 800 = 300) yet post a
+      // negative ledger credit and corrupt a drawer. The parts must be real, non-negative.
+      if (rentCash < 0 || rentUPI < 0 || depositCash < 0 || depositUPI < 0) throw new Error('Payment amounts cannot be negative.');
       if (Math.abs((rentCash + rentUPI) - rentAmount) > 1) {
         throw new Error('Rent split (₹' + (rentCash + rentUPI) + ') must equal the rent due (₹' + rentAmount + ').');
       }
@@ -211,17 +229,21 @@ function confirmBooking(bookingId, vehicleId, payment, operatorName, token) {
       }
     }
 
-    // Update booking row
-    sheet.getRange(targetRow, BC.STATUS          + 1).setValue('Active');
-  sheet.getRange(targetRow, BC.VEHICLE_ID      + 1).setValue(vehicleId);
-  sheet.getRange(targetRow, BC.VEHICLE_LABEL   + 1).setValue(vehicle.label);
-  sheet.getRange(targetRow, BC.RENT_CASH       + 1).setValue(rentCash);
-  sheet.getRange(targetRow, BC.RENT_UPI        + 1).setValue(rentUPI);
-  sheet.getRange(targetRow, BC.DEPOSIT_CASH    + 1).setValue(depositCash);
-  sheet.getRange(targetRow, BC.DEPOSIT_UPI     + 1).setValue(depositUPI);
-  // Server-resolved operator — never trust the client name (drawer integrity).
-  const opName = _opName(token) || operatorName || '';
-  sheet.getRange(targetRow, BC.OPERATOR_BOOKED + 1).setValue(opName);
+    // Update booking row (server-resolved operator — never trust the client name).
+    const opName = _opName(token) || operatorName || '';
+    booking[BC.STATUS]          = 'Active';
+    booking[BC.VEHICLE_ID]      = vehicleId;
+    booking[BC.VEHICLE_LABEL]   = vehicle.label;
+    booking[BC.RENT_CASH]       = rentCash;
+    booking[BC.RENT_UPI]        = rentUPI;
+    booking[BC.DEPOSIT_CASH]    = depositCash;
+    booking[BC.DEPOSIT_UPI]     = depositUPI;
+    booking[BC.OPERATOR_BOOKED] = opName;
+    // One batched range write (status + the contiguous VehicleId…OperatorBooked block)
+    // instead of eight per-cell writes — far fewer Sheets round-trips, faster confirm.
+    sheet.getRange(targetRow, BC.STATUS + 1).setValue('Active');
+    sheet.getRange(targetRow, BC.VEHICLE_ID + 1, 1, BC.OPERATOR_BOOKED - BC.VEHICLE_ID + 1)
+         .setValues([booking.slice(BC.VEHICLE_ID, BC.OPERATOR_BOOKED + 1)]);
 
     // Mark vehicle as Out
     _setVehicleStatusById(vehicleId, 'Out');
@@ -234,18 +256,190 @@ function confirmBooking(bookingId, vehicleId, payment, operatorName, token) {
       { type: 'DepositIn', direction: 'credit', amount: depositUPI,  account: 'upi',  operator: opName, bookingId: bookingId }
     ]);
 
-    // Fire the confirmation email (best-effort — never let it break the booking)
-    let emailSent = false;
-    try {
-      if (String(getSettingValue('emailEnabled')).toLowerCase() === 'yes') {
-        emailSent = sendBookingConfirmationEmail(bookingId);
+    _bumpDataVersion();
+    result = { success: true, vehicleLabel: vehicle.label };
+  } finally {
+    lock.releaseLock();
+  }
+
+  // Confirmation email is sent AFTER releasing the lock — sending mail can take a
+  // second or two and must never hold up another operator's action. Best-effort: a
+  // mail failure never voids a booking that is already saved.
+  result.emailSent = false;
+  try {
+    if (String(getSettingValue('emailEnabled')).toLowerCase() === 'yes') {
+      result.emailSent = sendBookingConfirmationEmail(bookingId);
+    }
+  } catch (e) {
+    Logger.log('Confirmation email failed for ' + bookingId + ': ' + e.message);
+  }
+  return result;
+}
+
+// ─── Admin — Extend a booking's return date ───────────────────────────────────
+// Moves the return date later and recalculates rent (and deposit, if the longer
+// stay crosses into another week) on the booking's OWN snapshot rates. For an
+// Active booking the extra is COLLECTED now (cash/UPI/split) and posted to the
+// immutable ledger exactly like a confirm — so the money invariant stays true:
+// we add real collected cash with matching ledger credits (Σ drawers == cash on
+// hand). For a Pending booking nothing is collected yet; the larger amount is taken
+// at confirmation. The new date legitimately moves the deadline, so the guest is not
+// charged a late fee for the days they paid to extend.
+function extendBooking(bookingId, newCheckOut, payment, token) {
+  requireAdmin(token);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(newCheckOut || '').trim())) {
+    throw new Error('Pick a valid new return date.');
+  }
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+    const sheet = _getBookingsSheet();
+    const data  = sheet.getDataRange().getValues();
+    let targetRow = -1, booking = null;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][BC.BOOKING_ID]) === bookingId) { targetRow = i + 1; booking = data[i]; break; }
+    }
+    if (!booking) throw new Error('Booking not found: ' + bookingId);
+    const st = String(booking[BC.STATUS]);
+    if (st !== 'Active' && st !== 'Pending') throw new Error('Only an active or pending booking can be extended.');
+
+    const checkIn     = _ymd(booking[BC.CHECK_IN]);
+    const oldCheckOut = _ymd(booking[BC.CHECK_OUT]);
+    const newOut      = String(newCheckOut).trim();
+    if (newOut <= oldCheckOut) throw new Error('The new return date must be later than the current one (' + oldCheckOut + ').');
+
+    // Recompute on the booking's OWN snapshot rates so the original days are never
+    // silently repriced (fall back to current rates only for legacy rows missing a snap).
+    const rates      = resolveRatesForBooking();
+    const dayRate    = Number(booking[BC.DAY_RATE_SNAP])         || rates.dayRate;
+    const depPerWeek = Number(booking[BC.DEPOSIT_PER_WEEK_SNAP]) || rates.depositPerWeek;
+    const newDays    = daysInclusive(checkIn, newOut);
+    const oldRent    = Number(booking[BC.RENT_AMOUNT])    || 0;
+    const oldDeposit = Number(booking[BC.DEPOSIT_AMOUNT]) || 0;
+    const newRent    = dayRate * newDays;
+    const newDeposit = depPerWeek * Math.ceil(newDays / 7);
+    const addRent    = newRent - oldRent;
+    const addDeposit = newDeposit - oldDeposit;
+    const addTotal   = addRent + addDeposit;
+    if (addTotal < 0) throw new Error('Extending should not reduce the amount due.');
+
+    // Collect the extra only for an Active booking (a Pending one pays at confirm).
+    let rentCash = 0, rentUPI = 0, depositCash = 0, depositUPI = 0;
+    const collect = (st === 'Active' && addTotal > 0);
+    if (collect) {
+      const pay = payment || { mode: 'cash' };
+      if (pay.mode === 'cash')      { rentCash = addRent; depositCash = addDeposit; }
+      else if (pay.mode === 'upi')  { rentUPI  = addRent; depositUPI  = addDeposit; }
+      else {
+        rentCash    = Number(pay.rentCash)    || 0;
+        rentUPI     = Number(pay.rentUPI)     || 0;
+        depositCash = Number(pay.depositCash) || 0;
+        depositUPI  = Number(pay.depositUPI)  || 0;
+        if (rentCash < 0 || rentUPI < 0 || depositCash < 0 || depositUPI < 0) throw new Error('Payment amounts cannot be negative.');
+        if (Math.abs((rentCash + rentUPI) - addRent) > 1) {
+          throw new Error('Rent split (₹' + (rentCash + rentUPI) + ') must equal the extra rent due (₹' + addRent + ').');
+        }
+        if (Math.abs((depositCash + depositUPI) - addDeposit) > 1) {
+          throw new Error('Deposit split (₹' + (depositCash + depositUPI) + ') must equal the extra deposit due (₹' + addDeposit + ').');
+        }
       }
-    } catch (e) {
-      Logger.log('Confirmation email failed for ' + bookingId + ': ' + e.message);
+    }
+
+    const opName = _opName(token) || '';
+    // Cash is modelled as sitting in the drawer of whoever the booking was booked under
+    // (getDrawers attributes a booking's collected cash to OPERATOR_BOOKED). Attribute the
+    // extension's ledger rows to that SAME operator so Bookings- and Ledger-derived books
+    // stay reconcilable down to the operator (mirrors confirmBooking). Note records who took it.
+    const bookedOp = String(booking[BC.OPERATOR_BOOKED] || '') || opName;
+    // Update dates + amounts; add freshly collected money onto what's already recorded.
+    sheet.getRange(targetRow, BC.CHECK_OUT     + 1).setValue(newOut);
+    sheet.getRange(targetRow, BC.DAYS          + 1).setValue(newDays);
+    sheet.getRange(targetRow, BC.RENT_AMOUNT   + 1).setValue(newRent);
+    sheet.getRange(targetRow, BC.DEPOSIT_AMOUNT+ 1).setValue(newDeposit);
+    sheet.getRange(targetRow, BC.TOTAL_AMOUNT  + 1).setValue(newRent + newDeposit);
+    if (collect) {
+      sheet.getRange(targetRow, BC.RENT_CASH    + 1).setValue((Number(booking[BC.RENT_CASH])    || 0) + rentCash);
+      sheet.getRange(targetRow, BC.RENT_UPI     + 1).setValue((Number(booking[BC.RENT_UPI])     || 0) + rentUPI);
+      sheet.getRange(targetRow, BC.DEPOSIT_CASH + 1).setValue((Number(booking[BC.DEPOSIT_CASH]) || 0) + depositCash);
+      sheet.getRange(targetRow, BC.DEPOSIT_UPI  + 1).setValue((Number(booking[BC.DEPOSIT_UPI])  || 0) + depositUPI);
+      const note = 'Extended ' + oldCheckOut + ' → ' + newOut + (opName && opName !== bookedOp ? ' (by ' + opName + ')' : '');
+      _appendLedgerRows([
+        { type: 'RentIn',    direction: 'credit', amount: rentCash,    account: 'cash', operator: bookedOp, bookingId: bookingId, note: note },
+        { type: 'RentIn',    direction: 'credit', amount: rentUPI,     account: 'upi',  operator: bookedOp, bookingId: bookingId, note: note },
+        { type: 'DepositIn', direction: 'credit', amount: depositCash, account: 'cash', operator: bookedOp, bookingId: bookingId, note: note },
+        { type: 'DepositIn', direction: 'credit', amount: depositUPI,  account: 'upi',  operator: bookedOp, bookingId: bookingId, note: note }
+      ]);
     }
 
     _bumpDataVersion();
-    return { success: true, vehicleLabel: vehicle.label, emailSent: emailSent };
+    return {
+      success: true, checkOut: newOut, days: newDays,
+      rentAmount: newRent, depositAmount: newDeposit, totalAmount: newRent + newDeposit,
+      addRent: addRent, addDeposit: addDeposit, addTotal: collect ? addTotal : 0
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ─── Admin — Edit a booking ───────────────────────────────────────────────────
+// Pending: correct any guest detail AND the dates (recomputes rent/deposit on the
+// booking's own snapshot rates; nothing is collected yet — payment is taken at
+// confirm, so no money moves). Active: correct guest details only — changing the
+// length/money of a PAID rental goes through Extend (longer) or Process return
+// (early) so the cash books stay exact. Only fields actually sent are overwritten.
+function editBooking(bookingId, data, token) {
+  requireAdmin(token);
+  data = data || {};
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+    const sheet = _getBookingsSheet();
+    const rows  = sheet.getDataRange().getValues();
+    let targetRow = -1, booking = null;
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][BC.BOOKING_ID]) === bookingId) { targetRow = i + 1; booking = rows[i]; break; }
+    }
+    if (!booking) throw new Error('Booking not found: ' + bookingId);
+    const st = String(booking[BC.STATUS]);
+    if (st !== 'Pending' && st !== 'Active') throw new Error('Only a pending or active booking can be edited.');
+
+    // Guest details — editable in both states. Only overwrite a field that was sent
+    // (a partial payload never blanks something); the name may not be cleared.
+    if (data.riderName  !== undefined && String(data.riderName).trim() !== '') sheet.getRange(targetRow, BC.RIDER_NAME   + 1).setValue(_sanitizeCell(String(data.riderName).trim()));
+    if (data.mobile     !== undefined) sheet.getRange(targetRow, BC.MOBILE       + 1).setValue(_sanitizeCell(String(data.mobile).trim()));
+    if (data.altMobile  !== undefined) sheet.getRange(targetRow, BC.ALT_MOBILE   + 1).setValue(_sanitizeCell(String(data.altMobile).trim()));
+    if (data.cottageName!== undefined) sheet.getRange(targetRow, BC.COTTAGE_NAME  + 1).setValue(_sanitizeCell(String(data.cottageName).trim()));
+    if (data.email      !== undefined) sheet.getRange(targetRow, BC.EMAIL        + 1).setValue(_sanitizeCell(String(data.email).trim()));
+    if (data.dlNumber   !== undefined) sheet.getRange(targetRow, BC.DL_NUMBER    + 1).setValue(_sanitizeCell(String(data.dlNumber).trim()));
+
+    const out = { success: true, status: st };
+
+    // Dates + money — PENDING only (no cash has moved yet, so recompute freely).
+    if (st === 'Pending' && (data.checkIn !== undefined || data.checkOut !== undefined)) {
+      const ymd = function (s, def) { return (s && /^\d{4}-\d{2}-\d{2}$/.test(String(s).trim())) ? String(s).trim() : def; };
+      const checkIn = ymd(data.checkIn, _ymd(booking[BC.CHECK_IN]));
+      let   checkOut = ymd(data.checkOut, _ymd(booking[BC.CHECK_OUT]));
+      if (checkOut < checkIn) checkOut = checkIn;
+      const rates      = resolveRatesForBooking();
+      const dayRate    = Number(booking[BC.DAY_RATE_SNAP])         || rates.dayRate;
+      const depPerWeek = Number(booking[BC.DEPOSIT_PER_WEEK_SNAP]) || rates.depositPerWeek;
+      const days       = daysInclusive(checkIn, checkOut);
+      const rent       = dayRate * days;
+      const deposit    = depPerWeek * Math.ceil(days / 7);
+      sheet.getRange(targetRow, BC.CHECK_IN      + 1).setValue(checkIn);
+      sheet.getRange(targetRow, BC.CHECK_OUT     + 1).setValue(checkOut);
+      sheet.getRange(targetRow, BC.DAYS          + 1).setValue(days);
+      sheet.getRange(targetRow, BC.RENT_AMOUNT   + 1).setValue(rent);
+      sheet.getRange(targetRow, BC.DEPOSIT_AMOUNT+ 1).setValue(deposit);
+      sheet.getRange(targetRow, BC.TOTAL_AMOUNT  + 1).setValue(rent + deposit);
+      out.days = days; out.rentAmount = rent; out.depositAmount = deposit; out.totalAmount = rent + deposit;
+    }
+
+    _bumpDataVersion();
+    return out;
   } finally {
     lock.releaseLock();
   }
@@ -257,7 +451,14 @@ function cancelBooking(bookingId, reason, operatorName, token) {
   const data  = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][BC.BOOKING_ID]) === bookingId) {
-      if (String(data[i][BC.STATUS]) === 'Active') {
+      // Only a Pending or Active booking may be cancelled. Cancelling a Returned
+      // booking would flip it to Cancelled — which accounting excludes — silently
+      // dropping its collected cash/refunds from the books while the ledger keeps them.
+      const st = String(data[i][BC.STATUS]);
+      if (st !== 'Pending' && st !== 'Active') {
+        throw new Error('Only a pending or active booking can be cancelled.');
+      }
+      if (st === 'Active') {
         // Free up the vehicle
         _setVehicleStatusById(String(data[i][BC.VEHICLE_ID]), 'Available');
       }
@@ -291,9 +492,15 @@ function getBookingsByStatus(status, token, bDataIn) {
 // can carry a past date, BUT its ledger entries are stamped NOW — so money always
 // counts under the current books and the immutable ledger can never be rewritten.
 function createBackdatedBooking(data, token) {
-  _requireManager(token);
+  requireAdmin(token);
   if (String(getSettingValue('allowPastBookings') || 'yes').toLowerCase() !== 'yes') {
     throw new Error('Adding past bookings is turned off in Settings.');
+  }
+  // Past bookings are a manager power by default. The manager may grant them to a
+  // supervisor (supRunBookings) or to ordinary operators (allowOperatorPastBookings).
+  if (!_isManager(token) && !_hasPower(token, 'supRunBookings') &&
+      String(getSettingValue('allowOperatorPastBookings') || 'no').toLowerCase() !== 'yes') {
+    throw new Error('Adding past bookings is a manager action. Ask the manager to enable access in Settings.');
   }
   if (!data.riderName) throw new Error('Rider name is required.');
 
@@ -310,6 +517,7 @@ function createBackdatedBooking(data, token) {
   // Payment split (manager states how it was paid)
   const rentCash = Number(data.rentCash) || 0, rentUPI = Number(data.rentUPI) || 0;
   const depCash  = Number(data.depositCash) || 0, depUPI = Number(data.depositUPI) || 0;
+  if (rentCash < 0 || rentUPI < 0 || depCash < 0 || depUPI < 0) throw new Error('Payment amounts cannot be negative.');
 
   const status = (String(data.status) === 'Active') ? 'Active' : 'Returned';
   const createdAt = ymd(data.createdAt, checkIn);   // historical creation date
@@ -321,11 +529,9 @@ function createBackdatedBooking(data, token) {
   let bookingId;
   try {
     // Booking id keyed to the historical date (DDMMYY-N) so it sorts in place.
+    // High-water mark (not a row count) so deletes/imports can't reuse an id.
     const ddmmyy = Utilities.formatDate(createdDate, 'Asia/Kolkata', 'ddMMyy');
-    const all = _getBookingsSheet().getDataRange().getValues();
-    let count = 0;
-    for (let i = 1; i < all.length; i++) { if (String(all[i][BC.BOOKING_ID] || '').indexOf(ddmmyy + '-') === 0) count++; }
-    bookingId = ddmmyy + '-' + (count + 1);
+    bookingId = ddmmyy + '-' + (_maxBookingSeq(ddmmyy) + 1);
 
     const row = new Array(36).fill('');
     row[BC.BOOKING_ID] = bookingId; row[BC.CREATED_AT] = createdDate; row[BC.STATUS] = status;
@@ -367,7 +573,8 @@ function createBackdatedBooking(data, token) {
 
 // ─── Manager: soft-delete a booking (the ledger keeps the money — bank records) ──
 function deleteBooking(bookingId, token) {
-  _requireManager(token);
+  // Manager, or a supervisor granted supDeleteBookings — AND the master toggle below.
+  _requirePower(token, 'supDeleteBookings');
   if (String(getSettingValue('allowDeleteBookings') || 'yes').toLowerCase() !== 'yes') {
     throw new Error('Deleting bookings is turned off in Settings.');
   }
@@ -388,26 +595,4 @@ function deleteBooking(bookingId, token) {
     }
   }
   throw new Error('Booking not found.');
-}
-
-function searchBookings(query, token) {
-  requireAdmin(token);
-  const q    = String(query).toLowerCase();
-  const data = _getBookingsSheet().getDataRange().getValues();
-  const out  = [];
-  for (let i = 1; i < data.length; i++) {
-    if (!data[i][BC.BOOKING_ID]) continue;
-    const r = data[i];
-    if (
-      String(r[BC.RIDER_NAME]).toLowerCase().includes(q) ||
-      String(r[BC.MOBILE]).includes(q) ||
-      String(r[BC.BOOKING_ID]).toLowerCase().includes(q) ||
-      String(r[BC.VEHICLE_LABEL]).toLowerCase().includes(q) ||
-      String(r[BC.COTTAGE_NAME]).toLowerCase().includes(q) ||
-      String(r[BC.DL_NUMBER]).toLowerCase().includes(q)
-    ) {
-      out.push(_rowToBooking(r));
-    }
-  }
-  return out.reverse();
 }

@@ -118,15 +118,17 @@ function _backfillLedger() {
 // managers' own net collections. Invariant: Σ drawers == total cash on hand.
 function getDrawers(token, summary, bDataIn, hDataIn) {
   requireAdmin(token);
-  const mgr = _isManager(token);
+  // A manager — or a supervisor GRANTED supViewMoney — sees every drawer (server-
+  // enforced, not just hidden). Everyone else sees only their own drawer.
+  const canViewAll = _isManager(token) || _hasPower(token, 'supViewMoney');
   const me  = _opName(token);
   const bData = bDataIn || _getAllBookingsRaw();
   const hData = hDataIn || _getAllHandoversRaw();
   const ops   = _getOperatorsData();
   const openingCash = Number(getSettingValue('openingCashBalance')) || 0;
 
-  const roleOf = {}; const emailOf = {};
-  ops.forEach(function (o) { roleOf[o.name] = o.role; emailOf[o.name] = o.email; });
+  const roleOf = {}; const emailOf = {}; const activeByName = {};
+  ops.forEach(function (o) { roleOf[o.name] = o.role; emailOf[o.name] = o.email; activeByName[o.name] = o.active; });
   const isMgrName = function (nm) { return roleOf[nm] === 'Admin' || roleOf[nm] === 'Manager'; };
 
   const collected = {};   // name → cash collected
@@ -142,13 +144,15 @@ function getDrawers(token, summary, bDataIn, hDataIn) {
     if (!row[BC.BOOKING_ID]) continue;
     const st = String(row[BC.STATUS]);
     if (st === 'Pending' || st === 'Cancelled') continue;
-    // Cash physically sits with whoever COLLECTED it (OPERATOR_BOOKED). A refund hands
-    // that same deposit cash back, so it leaves the COLLECTOR's drawer — never the
-    // returner's (charging the returner could push their drawer negative for cash they
-    // never held). A return is counted whenever ACTUAL_RETURN is set (incl. soft-deleted).
+    // Cash physically sits with whoever COLLECTED it (OPERATOR_BOOKED).
     add(collected, baseName(row[BC.OPERATOR_BOOKED]), (Number(row[BC.RENT_CASH]) || 0) + (Number(row[BC.DEPOSIT_CASH]) || 0));
-    if (row[BC.ACTUAL_RETURN]) add(refunded, baseName(row[BC.OPERATOR_BOOKED]), Number(row[BC.REFUND_CASH]) || 0);
   }
+  // Cash refunds leave the drawer of whoever ACTUALLY PAID them — sourced from the LEDGER
+  // by the row's Operator field, so a standalone refund (recordRefund, ledger-only) and a
+  // booking-return refund both reduce the correct drawer. Σ refunds is unchanged, so the
+  // global total is untouched; only per-drawer attribution reflects the real payer.
+  const _ledRef = _ledgerRefunds();
+  Object.keys(_ledRef.byOp).forEach(function (nm) { add(refunded, baseName(nm), _ledRef.byOp[nm].cash || 0); });
   // A transfer always leaves the SENDER's drawer. If it's addressed to the manager it
   // folds into the manager pool (totalApprovedHandovers); if to another OPERATOR it
   // credits that operator's drawer (operator↔operator transfer). Net 0 to total cash
@@ -174,28 +178,41 @@ function getDrawers(token, summary, bDataIn, hDataIn) {
   Object.keys(refunded).forEach(function (n) { names[n] = 1; });
   Object.keys(handedOut).forEach(function (n) { names[n] = 1; });
   Object.keys(receivedIn).forEach(function (n) { names[n] = 1; });
-  ops.forEach(function (o) { if (!isMgrName(o.name)) names[o.name] = 1; });
+  // Seed only ACTIVE operators (so a current operator shows even at ₹0). A removed
+  // operator appears only if their cash history still nets non-zero (handled below).
+  ops.forEach(function (o) { if (o.active && !isMgrName(o.name)) names[o.name] = 1; });
 
   const operators = [];
   let managerCollNet = 0;
   Object.keys(names).forEach(function (nm) {
     if (!nm || nm === '—') { managerCollNet += drawerOf(nm); return; }   // unattributed → manager pool
     if (isMgrName(nm)) { managerCollNet += drawerOf(nm); return; }
-    operators.push({ name: nm, email: emailOf[nm] || '', balance: drawerOf(nm) });
+    const bal = drawerOf(nm);
+    // A removed (deactivated) operator who no longer holds cash must NOT linger as a ₹0
+    // drawer in the Money view. Active operators always show; a removed one shows only if
+    // cash remains (which would be unsettled money worth surfacing). Any sub-rupee residue
+    // of a removed drawer folds into the manager pool so Σ drawers == cash on hand stays exact.
+    if (!activeByName[nm] && Math.abs(bal) < 1) { managerCollNet += bal; return; }
+    operators.push({ name: nm, email: emailOf[nm] || '', balance: bal });
   });
   const acc = summary || getAccountingSummary(token, bData, hData);
   // The manager holds opening + verified handovers + their own net, MINUS whatever
   // has been relieved to the company. Keeps Σ drawers == total cash on hand.
   const managerBalance = openingCash + totalApprovedHandovers + managerCollNet - (acc.relieved || 0);
   const result = {
-    scope: mgr ? 'manager' : 'operator',
+    scope: canViewAll ? 'manager' : 'operator',
     totalCashOnHand: acc.cashInHand,
     depositHeld: acc.depositHeldTotal,
     upiNet: acc.upiNet
   };
-  if (mgr) {
+  if (canViewAll) {
     result.manager = { name: managerLabel, balance: managerBalance };
     result.operators = operators.sort(function (a, b) { return b.balance - a.balance; });
+    // A granted supervisor still runs the desk and physically holds their own cash —
+    // expose myBalance so they can transfer it (a manager doesn't need this, and the
+    // internal callers requestHandover/getOperatorMoney always rely on it being present).
+    const selfO = operators.filter(function (o) { return o.name === me; })[0];
+    result.myBalance = selfO ? selfO.balance : drawerOf(me);
   } else {
     const self = operators.filter(function (o) { return o.name === me; })[0] || { name: me, email: '', balance: drawerOf(me) };
     result.operators = [self];
@@ -312,8 +329,15 @@ function recordRefund(amount, account, note, bookingId, token) {
   _requireManager(token);   // standalone refund is a manager-only action (matches the UI)
   const amt = Math.round(Number(amount) || 0);
   if (amt <= 0) throw new Error('Enter a refund amount.');
+  const acct = account === 'upi' ? 'upi' : 'cash';
+  // You can't pay out more cash than is on hand — a cap stops a typo'd refund (an extra
+  // zero) driving cash on hand / the manager drawer negative.
+  if (acct === 'cash') {
+    const acc = getAccountingSummary(token);
+    if (amt > acc.cashInHand + 1) throw new Error('Cannot refund more than the cash on hand (' + _inr(acc.cashInHand) + ').');
+  }
   const me = _opName(token);
-  _appendLedgerRows([{ type: 'Refund', direction: 'debit', amount: amt, account: account === 'upi' ? 'upi' : 'cash',
+  _appendLedgerRows([{ type: 'Refund', direction: 'debit', amount: amt, account: acct,
     operator: me, bookingId: bookingId || '', note: note || ('Refund by ' + me) }]);
   _bumpDataVersion();
   return { success: true };
@@ -345,10 +369,37 @@ function _ledgerRelieveCash(ledDataIn) {
   return sum;
 }
 
+// Refunds, sourced from the LEDGER (its single home for BOTH booking-return refunds and
+// standalone refunds — each is exactly one debit row, so no double count). A cash refund
+// is type 'Refund' on account 'cash'; a UPI deposit refund is type 'DepositRefund' on
+// account 'upi'. Returns { cash, upi, byOp } where byOp[name] = { cash, upi } per the
+// row's Operator field (the operator who actually paid the refund out of their drawer).
+function _ledgerRefunds(ledDataIn) {
+  const data = ledDataIn || _ensureLedgerSheet().getDataRange().getValues();
+  const baseName = function (n) { return String(n || '').replace(/\s*\(backdated\)\s*$/i, ''); };
+  let cash = 0, upi = 0; const byOp = {};
+  const bump = function (op, k, v) { const nm = baseName(op); if (!byOp[nm]) byOp[nm] = { cash: 0, upi: 0 }; byOp[nm][k] += v; };
+  for (let i = 1; i < data.length; i++) {
+    if (!data[i][LC.TXN_ID]) continue;
+    if (String(data[i][LC.DIR]) !== 'debit') continue;
+    const type = String(data[i][LC.TYPE]), acct = String(data[i][LC.ACCOUNT]), amt = Number(data[i][LC.AMOUNT]) || 0;
+    // Match by refund-type + account (NOT a fixed type→account pairing): processReturn
+    // posts 'Refund'/cash + 'DepositRefund'/upi, while a standalone recordRefund posts
+    // 'Refund' on EITHER account. Counting both refund types on each account catches a
+    // standalone UPI refund too, and never counts a 'Relieve' (excluded by type).
+    const isRefund = (type === 'Refund' || type === 'DepositRefund');
+    if (isRefund && acct === 'cash') { cash += amt; bump(data[i][LC.OPERATOR], 'cash', amt); }
+    else if (isRefund && acct === 'upi') { upi += amt; bump(data[i][LC.OPERATOR], 'upi', amt); }
+  }
+  return { cash: cash, upi: upi, byOp: byOp };
+}
+
 // ─── Passbook (paginated, newest first; operators see only their own rows) ─────
 function getLedger(period, offset, limit, token) {
   requireAdmin(token);
-  const mgr = _isManager(token);
+  // Full passbook for a manager or a supViewMoney supervisor; everyone else sees
+  // only the rows attributed to them (server-enforced).
+  const mgr = _hasPower(token, 'supViewMoney');
   const me  = _opName(token);
   const sheet = _ensureLedgerSheet();
   const data = sheet.getDataRange().getValues();
@@ -458,7 +509,8 @@ function runSelfAudit(token) {
   }
   if (bad > 8) issues.push({ severity: 'medium', where: 'Bookings', detail: (bad - 8) + ' more bookings have mismatched amounts.' });
 
-  // 4) No drawer should be negative.
+  // 4) No drawer should be negative — including the manager's.
+  if (dr.manager && dr.manager.balance < -1) issues.push({ severity: 'high', where: 'Drawer · ' + dr.manager.name + ' (manager)', detail: 'Negative balance ' + _inr(dr.manager.balance) + ' — more relieved/refunded than held.' });
   (dr.operators || []).forEach(function (o) {
     if (o.balance < -1) issues.push({ severity: 'medium', where: 'Drawer · ' + o.name, detail: 'Negative balance ' + _inr(o.balance) + ' — more handed over/refunded than collected.' });
   });
@@ -466,14 +518,4 @@ function runSelfAudit(token) {
   const ok = issues.length === 0;
   try { _ensureAuditSheet().appendRow([new Date(), ok ? 'PASS' : 'FAIL', acc.cashInHand, ledgerCash, cashDelta, issues.length, JSON.stringify(issues).slice(0, 4000)]); } catch (e) {}
   return { ok: ok, checkedAt: _formatIST(new Date()), cashOnHand: acc.cashInHand, ledgerCash: ledgerCash, cashDelta: cashDelta, drawerSum: drawerSum, issues: issues };
-}
-
-function getAuditHistory(token) {
-  _requireManager(token);
-  const data = _ensureAuditSheet().getDataRange().getValues(), out = [];
-  for (let i = 1; i < data.length; i++) {
-    if (!data[i][0]) continue;
-    out.push({ when: _formatIST(data[i][0]), result: String(data[i][1]), delta: Number(data[i][4]) || 0, issues: Number(data[i][5]) || 0 });
-  }
-  return out.reverse().slice(0, 30);
 }

@@ -84,6 +84,27 @@
     .panel{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:22px;}
     .panel h2{font-family:var(--serif);font-weight:500;font-size:19px;margin:0;}
     .row-item{display:flex;align-items:center;gap:14px;padding:13px 4px;border-top:1px solid var(--hair);}
+    /* Booking list row. Desktop = the original inline flex, reproduced exactly. */
+    .bk-row{display:flex;align-items:center;gap:16px;padding:16px 20px;border-top:1px solid var(--hair);flex-wrap:wrap;cursor:pointer;}
+    .bk-row .bk-name{flex:1.4;min-width:120px;}
+    .bk-row .bk-name .nm{font-weight:600;font-size:15px;}
+    .bk-row .bk-name .mt{font-size:12.5px;color:var(--muted-2);}
+    .bk-row .bk-c{flex:1;min-width:90px;}
+    .bk-row .bk-scoot{min-width:96px;}
+    .bk-row .bk-until{flex:1.1;min-width:110px;}
+    .bk-row .bk-cap{font-size:12.5px;color:var(--faint);}
+    .bk-row .bk-mono{font-family:var(--mono);font-size:13px;color:var(--txt-2);}
+    .bk-row .bk-plain{font-size:13px;color:var(--txt-2);}
+    .bk-row .bk-end{flex:none;display:flex;gap:9px;align-items:center;margin-left:auto;}
+    /* Phone (≤640px): stack into a card — name + status on top, meta wrapped beneath. */
+    @media(max-width:640px){
+      .bk-row{align-items:flex-start;gap:4px 12px;padding:14px 16px;}
+      .bk-row .bk-name{order:1;flex:1 1 auto;min-width:0;}
+      .bk-row .bk-name .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .bk-row .bk-end{order:2;align-self:flex-start;}
+      .bk-row .bk-end svg{display:none;}
+      .bk-row .bk-c,.bk-row .bk-until{order:3;flex:1 1 42%;min-width:0;margin-top:6px;}
+    }
     .av{width:40px;height:40px;border-radius:13px;background:var(--surface-2);color:var(--txt-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex:none;}
     .cash-hero{background:linear-gradient(150deg,var(--pine),#1C3A31);color:#fff;border-radius:20px;padding:24px;}
     .link-btn{background:none;border:none;color:var(--pine);font-weight:600;font-size:13px;cursor:pointer;padding:6px 8px;border-radius:8px;}
@@ -108,11 +129,27 @@
     .modal-head .ttl{font-family:var(--serif);font-size:23px;font-weight:500;}
     .modal-head .sub{font-size:13px;color:var(--muted-2);margin-top:1px;}
     .modal-body{padding:20px 24px;overflow-y:auto;flex:1;}
-    .modal-foot{display:flex;gap:12px;padding:16px 24px 22px;border-top:1px solid var(--hair);flex:none;}
+    .modal-foot{display:flex;flex-wrap:wrap;gap:12px;padding:16px 24px 22px;border-top:1px solid var(--hair);flex:none;}
     .x-btn{width:34px;height:34px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface);color:var(--muted-2);cursor:pointer;font-size:14px;flex:none;}
     .btn-lg{flex:1;padding:13px;border-radius:13px;border:none;background:var(--pine);color:#fff;font-weight:600;font-size:14.5px;cursor:pointer;}
     .btn-lg.danger{background:var(--terra-2);}
     .btn-ghost-lg{flex:0 0 auto;padding:13px 20px;border-radius:13px;border:1px solid #DDD5C5;background:transparent;color:var(--muted);font-weight:600;font-size:14.5px;cursor:pointer;}
+    /* Booking-details footer: compact secondary actions left, one primary right — never a wall of fat buttons */
+    .bk-foot{display:flex;align-items:center;gap:9px;flex-wrap:wrap;width:100%;}
+    .bk-foot .sp{flex:1 1 auto;min-width:6px;}
+    .bk-foot .sec{display:inline-flex;align-items:center;gap:7px;padding:10px 14px;border-radius:11px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;font-size:13.5px;cursor:pointer;transition:background .12s,color .12s;}
+    .bk-foot .sec:hover{background:var(--surface-2);color:var(--ink);}
+    .bk-foot .sec.danger{color:var(--terra);border-color:var(--terra-tint);}
+    .bk-foot .sec.danger:hover{background:var(--terra-tint);}
+    .bk-foot .pri{flex:0 0 auto;padding:12px 22px;border-radius:12px;border:none;background:var(--pine);color:#fff;font-weight:600;font-size:14.5px;cursor:pointer;}
+    .bk-foot .pri.danger{background:var(--terra-2);}
+    @media(max-width:560px){.bk-foot .sp{display:none;}.bk-foot{justify-content:flex-end;}.bk-foot .pri{flex:1 1 auto;}}
+    /* Sliding filter panel (Bookings → All) — collapsed by height/opacity, slides in on toggle */
+    .filt-panel{max-height:0;opacity:0;overflow:hidden;transform:translateX(-10px);transition:max-height .32s cubic-bezier(.4,0,.2,1),opacity .26s ease,transform .32s cubic-bezier(.4,0,.2,1),margin .32s ease;margin-bottom:0;}
+    .filt-panel.open{max-height:480px;opacity:1;transform:translateX(0);margin-bottom:18px;}
+    .filt-grid{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;}
+    .filt-grid .fcol{display:flex;flex-direction:column;gap:5px;min-width:150px;flex:1;}
+    .filt-grid .fcol label{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);}
     .summary{background:var(--card-2);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:18px;}
     .summary .sr{display:flex;justify-content:space-between;font-size:14px;margin-bottom:7px;}
     .summary .sr.total{font-size:15.5px;border-top:1px solid #E4DCCC;padding-top:9px;margin-bottom:0;}
@@ -188,7 +225,7 @@
         </div>
         <div>
           <label class="field-label">Late fee / hour (₹)</label>
-          <input id="wz-late" class="field" type="number" value="50">
+          <input id="wz-late" class="field" type="number" value="0">
         </div>
         <div>
           <label class="field-label">Opening cash (₹)</label>

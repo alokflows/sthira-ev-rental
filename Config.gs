@@ -4,7 +4,7 @@ const DEFAULT_SETTINGS = {
   dayRate:            '300',
   depositPerWeek:     '2000',
   lateFeeMode:        'perHour',   // 'perHour' | 'fullExtraDay'
-  lateFeePerHour:     '50',
+  lateFeePerHour:     '0',
   graceMinutes:       '30',
   rentalStartTime:    '09:00',   // desk opens — shown to guests (IST, 24h HH:MM)
   rentalEndTime:      '21:00',   // return deadline — late fees start after this (IST)
@@ -21,7 +21,13 @@ const DEFAULT_SETTINGS = {
   reportCC:           '',             // optional CC (comma-separated) for reports
   // ── Manager powers (gated by role AND these toggles) ──
   allowPastBookings:  'yes',          // 'yes' lets a manager add backdated bookings
-  allowDeleteBookings:'yes',          // 'yes' lets a manager soft-delete a booking (ledger stays)
+  allowDeleteBookings:'no',           // 'yes' lets a manager soft-delete a booking (ledger stays). Off by default — grant in Settings.
+  allowOperatorPastBookings: 'no',    // 'yes' lets the manager grant ordinary operators the "add past booking" ability too
+  // ── Supervisor powers (one shared set; a Supervisor gets ONLY what is 'yes' here) ──
+  supViewAllBookings: 'no',           // supervisor: see all bookings + Overview/reports analytics
+  supViewMoney:       'no',           // supervisor: full Money view + Reports + CSV export (read only, NO relieve/refund)
+  supRunBookings:     'no',           // supervisor: add past bookings + edit/extend
+  supDeleteBookings:  'no',           // supervisor: soft-delete a booking (ALSO needs the master allowDeleteBookings)
   appVersion:         '3.0'
 };
 
@@ -116,11 +122,18 @@ function getAdminSettings(token) {
 const MANAGER_ONLY_SETTINGS = {
   dayRate: 1, depositPerWeek: 1, lateFeeMode: 1, lateFeePerHour: 1, graceMinutes: 1,
   rentalStartTime: 1, rentalEndTime: 1, openingCashBalance: 1, managerLabel: 1,
-  allowPastBookings: 1, allowDeleteBookings: 1, reportEmail: 1, reportCC: 1
+  allowPastBookings: 1, allowDeleteBookings: 1, allowOperatorPastBookings: 1, reportEmail: 1, reportCC: 1,
+  supViewAllBookings: 1, supViewMoney: 1, supRunBookings: 1, supDeleteBookings: 1
 };
 
 function updateSetting(key, value, operatorName, token) {
-  if (MANAGER_ONLY_SETTINGS[key]) _requireManager(token); else requireAdmin(token);
+  if (MANAGER_ONLY_SETTINGS[key]) {
+    // The reporting recipients are part of the read-only money/reports surface a
+    // supViewMoney supervisor may manage; every other manager-only setting (pricing,
+    // opening cash, the power toggles themselves, …) stays strictly manager-only.
+    if (key === 'reportEmail' || key === 'reportCC') _requirePower(token, 'supViewMoney');
+    else _requireManager(token);
+  } else requireAdmin(token);
   const sheet = _getSettingsSheet();
   const data = sheet.getDataRange().getValues();
   let oldValue = '';
@@ -160,15 +173,23 @@ function updateMultipleSettings(updates, operatorName, token) {
   return { success: true };
 }
 
-// Snapshot of current rates — embedded in each booking at creation time
+// Snapshot of current rates — embedded in each booking at creation time.
+// Use the saved value whenever one exists — a deliberate 0 (e.g. "no late fee",
+// "no grace") must STICK; only fall back to the default when the setting is blank
+// or non-numeric. (`Number(x) || default` wrongly turns a saved 0 into the default.)
+function _settingNum(v, def) {
+  if (v === '' || v === null || v === undefined) return def;
+  const n = Number(v);
+  return isNaN(n) ? def : n;
+}
 function resolveRatesForBooking() {
   const s = _getAllSettingsRaw();
   return {
-    dayRate:        Number(s.dayRate)        || 300,
-    depositPerWeek: Number(s.depositPerWeek) || 2000,
-    lateFeeMode:    s.lateFeeMode            || 'perHour',
-    lateFeePerHour: Number(s.lateFeePerHour) || 50,
-    graceMinutes:   Number(s.graceMinutes)   || 30
+    dayRate:        _settingNum(s.dayRate,        300),
+    depositPerWeek: _settingNum(s.depositPerWeek, 2000),
+    lateFeeMode:    s.lateFeeMode               || 'perHour',
+    lateFeePerHour: _settingNum(s.lateFeePerHour, 0),
+    graceMinutes:   _settingNum(s.graceMinutes,   30)
   };
 }
 
@@ -185,22 +206,4 @@ function daysInclusive(checkInYmd, checkOutYmd) {
   const d2 = Date.UTC(+b[1], +b[2] - 1, +b[3]);
   const diff = Math.round((d2 - d1) / 86400000);
   return diff >= 0 ? diff + 1 : 1;
-}
-
-// Price calculator — used both server-side and exposed for client-side calls
-function calculatePrice(days) {
-  const rates = resolveRatesForBooking();
-  const d = Math.max(1, parseInt(days) || 1);
-  const rentAmount    = rates.dayRate * d;
-  const depositWeeks  = Math.ceil(d / 7);
-  const depositAmount = rates.depositPerWeek * depositWeeks;
-  return {
-    days:           d,
-    dayRate:        rates.dayRate,
-    depositPerWeek: rates.depositPerWeek,
-    depositWeeks:   depositWeeks,
-    rentAmount:     rentAmount,
-    depositAmount:  depositAmount,
-    totalAmount:    rentAmount + depositAmount
-  };
 }

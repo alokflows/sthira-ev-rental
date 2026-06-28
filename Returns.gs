@@ -10,6 +10,12 @@ function processReturn(bookingId, returnData, token) {
   //   notes: string
   // }
 
+  // Serialize the whole read-check-settle under a lock so a double-tap or two devices
+  // can't both pass the Active guard and post the refund twice (corrupting the ledger).
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
   const sheet  = _getBookingsSheet();
   const data   = sheet.getDataRange().getValues();
   let targetRow = -1;
@@ -109,20 +115,35 @@ function processReturn(bookingId, returnData, token) {
     refundUPI = refundAmount;
   }
 
+  // Cap each channel to what was actually COLLECTED for this booking, then fill any
+  // shortfall from the other channel. A UPI-collected deposit refunded "as cash" must
+  // not pay out cash that was never collected (which would drive the drawer negative).
+  // Total deposit collected is always ≥ refundAmount, so the fill always closes the gap.
+  refundCash = Math.min(refundCash, collectedCash);
+  refundUPI  = Math.min(refundUPI,  collectedUPI);
+  let _short = refundAmount - refundCash - refundUPI;
+  if (_short > 0) { const ac = Math.min(_short, collectedCash - refundCash); refundCash += ac; _short -= ac;
+                    const au = Math.min(_short, collectedUPI  - refundUPI ); refundUPI  += au; }
+
   // ── Write to sheet ────────────────────────────────────────────────────────
-  sheet.getRange(targetRow, BC.STATUS            + 1).setValue('Returned');
-  sheet.getRange(targetRow, BC.ACTUAL_RETURN     + 1).setValue(actualReturn);
-  sheet.getRange(targetRow, BC.LATE_HOURS        + 1).setValue(lateHours);
-  sheet.getRange(targetRow, BC.LATE_FEE          + 1).setValue(lateFee);
-  sheet.getRange(targetRow, BC.DEDUCTION_TOTAL   + 1).setValue(deductionTotal);
-  sheet.getRange(targetRow, BC.REFUND_CASH       + 1).setValue(refundCash);
-  sheet.getRange(targetRow, BC.REFUND_UPI        + 1).setValue(refundUPI);
-  sheet.getRange(targetRow, BC.REFUND_TOTAL      + 1).setValue(refundAmount);
   // Server-resolved operator — the drawer that pays the refund is attributed to
   // whoever is actually signed in, never a client-sent name.
   const opName = _opName(token) || returnData.operatorName || '';
-  sheet.getRange(targetRow, BC.OPERATOR_RETURNED + 1).setValue(opName);
-  sheet.getRange(targetRow, BC.RETURN_NOTES      + 1).setValue(returnData.notes || '');
+  booking[BC.STATUS]            = 'Returned';
+  booking[BC.ACTUAL_RETURN]     = actualReturn;
+  booking[BC.LATE_HOURS]        = lateHours;
+  booking[BC.LATE_FEE]          = lateFee;
+  booking[BC.DEDUCTION_TOTAL]   = deductionTotal;
+  booking[BC.REFUND_CASH]       = refundCash;
+  booking[BC.REFUND_UPI]        = refundUPI;
+  booking[BC.REFUND_TOTAL]      = refundAmount;
+  booking[BC.OPERATOR_RETURNED] = opName;
+  booking[BC.RETURN_NOTES]      = returnData.notes || '';
+  // One batched range write (status + the contiguous ActualReturn…ReturnNotes block)
+  // instead of ten per-cell writes — fewer Sheets round-trips, faster return.
+  sheet.getRange(targetRow, BC.STATUS + 1).setValue('Returned');
+  sheet.getRange(targetRow, BC.ACTUAL_RETURN + 1, 1, BC.RETURN_NOTES - BC.ACTUAL_RETURN + 1)
+       .setValues([booking.slice(BC.ACTUAL_RETURN, BC.RETURN_NOTES + 1)]);
 
   // Free the vehicle
   _setVehicleStatusById(String(booking[BC.VEHICLE_ID]), 'Available');
@@ -151,24 +172,7 @@ function processReturn(bookingId, returnData, token) {
     refundUPI:       refundUPI,
     refundMode:      refundMode
   };
-}
-
-function getDeductionsByBooking(bookingId, token) {
-  requireAdmin(token);
-  const sheet = _getSS().getSheetByName('Deductions');
-  const data  = sheet.getDataRange().getValues();
-  const out   = [];
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][1]) === bookingId) {
-      out.push({
-        deductionId: String(data[i][0]),
-        bookingId:   String(data[i][1]),
-        amount:      Number(data[i][2]) || 0,
-        reason:      String(data[i][3] || ''),
-        appliedBy:   String(data[i][4] || ''),
-        timestamp:   data[i][5] ? _formatIST(data[i][5]) : ''
-      });
-    }
+  } finally {
+    lock.releaseLock();
   }
-  return out;
 }

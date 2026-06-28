@@ -81,7 +81,7 @@
   .btn-ghost{background:none;color:var(--pine);box-shadow:none;}
 
   /* ── Form fields ── */
-  .field-label{font-size:12.5px;color:#7C7565;font-weight:600;display:block;margin-bottom:7px;}
+  .field-label{font-size:12.5px;color:var(--muted-2);font-weight:600;display:block;margin-bottom:7px;}
   .field-label .req{color:var(--terra-2);}
   .field{width:100%;padding:12px 14px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);
          font-size:14.5px;color:var(--ink);transition:border-color .15s;}
@@ -128,4 +128,28 @@
         display:inline-block;animation:agSpin .7s linear infinite;}
   @keyframes agSpin{to{transform:rotate(360deg);}}
   .hidden{display:none !important;}
+
+  /* ── Printable receipt (deposit / refund) ──────────────────────────────
+     The .print-receipt block is injected into <body> only while printing and
+     removed afterward. On screen it's hidden; @media print hides the whole app
+     and shows just the receipt, so window.print() yields a clean slip. */
+  .print-receipt{display:none;}
+  .print-receipt .pr-head{text-align:center;border-bottom:2px solid var(--ink);padding-bottom:14px;margin-bottom:18px;}
+  .print-receipt .pr-brand{font-family:var(--serif);font-size:30px;font-weight:600;letter-spacing:.02em;color:var(--ink);}
+  .print-receipt .pr-sub{font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-top:4px;}
+  .print-receipt .pr-meta{margin-bottom:18px;}
+  .print-receipt .pr-meta-row{display:flex;justify-content:space-between;gap:18px;padding:6px 0;font-size:13.5px;border-bottom:1px solid var(--line);}
+  .print-receipt .pr-meta-row span:first-child{color:var(--muted);} .print-receipt .pr-meta-row span:last-child{font-weight:600;text-align:right;color:var(--ink);}
+  .print-receipt .pr-money{border:1px solid var(--line-2);border-radius:12px;padding:14px 16px;background:var(--surface);}
+  .print-receipt .pr-line{display:flex;justify-content:space-between;gap:18px;padding:6px 0;font-size:14px;color:var(--ink);}
+  .print-receipt .pr-line.pr-minus span:last-child{color:var(--terra);}
+  .print-receipt .pr-line.pr-total{font-weight:700;font-size:15.5px;border-top:1px solid var(--line-2);margin-top:6px;padding-top:10px;}
+  .print-receipt .pr-rule{border-top:1px dashed var(--line-2);margin:8px 0;}
+  .print-receipt .pr-foot{margin-top:20px;text-align:center;font-size:12px;color:var(--muted);}
+  @media print{
+    body.printing>*{display:none !important;}
+    body.printing .print-receipt{display:block !important;max-width:480px;margin:0 auto;padding:24px;color:#000;}
+    body.printing .print-receipt .pr-brand,body.printing .print-receipt .pr-meta-row span:last-child,body.printing .print-receipt .pr-line{color:#000;}
+    body.printing .print-receipt .pr-money{background:#fff;}
+  }
 </style>

@@ -25,17 +25,6 @@ function _getVehiclesData() {
   return rows;
 }
 
-function getVehicles(token) {
-  requireAdmin(token);
-  return _getVehiclesData();
-}
-
-function getAvailableVehicles(token) {
-  requireAdmin(token);
-  // Only Rental-type vehicles can be assigned to riders (not Staff/management vehicles)
-  return _getVehiclesData().filter(v => v.status === 'Available' && v.type !== 'Staff');
-}
-
 function addVehicle(label, vehicleType, notes, token) {
   requireAdmin(token);
   const sheet = _getVehiclesSheet();
@@ -47,7 +36,14 @@ function addVehicle(label, vehicleType, notes, token) {
   if (existing.some(v => String(v.label).trim().toLowerCase() === cleanLabel.toLowerCase())) {
     throw new Error('A scooter labelled “' + cleanLabel + '” already exists.');
   }
-  const nextNum = existing.length + 1;
+  // High-water mark, not a row count: scan EV<number> ids and take max suffix + 1,
+  // so a hard deleteVehicle can never make the next id reuse an existing one.
+  let maxNum = 0;
+  existing.forEach(function (v) {
+    const m = /^EV(\d+)$/.exec(String(v.vehicleId));
+    if (m) { const n = parseInt(m[1], 10); if (!isNaN(n) && n > maxNum) maxNum = n; }
+  });
+  const nextNum = maxNum + 1;
   const id = 'EV' + String(nextNum).padStart(3, '0');
   const type = vehicleType === 'Staff' ? 'Staff' : 'Rental';
   const initialStatus = type === 'Staff' ? 'Staff' : 'Available';

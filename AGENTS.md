@@ -20,7 +20,7 @@ new account, deploy, done — see `PORTABILITY.md`).
 
 **Stack:** Google Apps Script (server `.gs` + HTML-service client `.html`), deployed with `clasp`. No build
 step, no external services. GAS has **no server push / WebSockets** — the desk approximates realtime with a
-4-second pulse poll (`getPulse`) that only triggers a full re-read when data actually changed.
+1-second pulse poll (`getPulse`, no-overlap guarded) that only triggers a full re-read when data actually changed.
 
 ---
 
@@ -61,7 +61,7 @@ step, no external services. GAS has **no server push / WebSockets** — the desk
   (`allowPastBookings`, `allowDeleteBookings`).
 - **Dates:** read every Bookings date cell through `_ymd(value)` before deadline math; times through
   `_hhmm(value)` (Sheets coerces "HH:MM" to a 1899 date serial otherwise).
-- **Every mutation MUST call `_bumpDataVersion()`** before returning — it drives the 4-second pulse sync.
+- **Every mutation MUST call `_bumpDataVersion()`** before returning — it drives the 1-second pulse sync.
 
 ---
 
@@ -118,7 +118,7 @@ The live account, scriptId, deploymentId, and exec URL are kept out of source co
 
 ```
 Code.gs        doGet router, auth, roles, bootstrap entry, migrations, _requireManager, _hashPin
-Config.gs      DEFAULT_SETTINGS, settings CRUD, getPublicSettings, calculatePrice, daysInclusive, _ymd, _hhmm
+Config.gs      DEFAULT_SETTINGS, settings CRUD, getPublicSettings, daysInclusive, _ymd, _hhmm
 Setup.gs       schema + initializeSheets (positional, append-only columns)
 Cottages.gs    cottage CRUD + getPublicCottages
 Bookings.gs    booking lifecycle, DDMMYY-N id, confirm→email, backdated + soft-delete

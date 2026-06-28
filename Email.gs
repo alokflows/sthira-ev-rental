@@ -278,7 +278,7 @@ function getEmailQuota(token) {
 
 // ── Manager: email a business report (summary or detailed) to reportEmail + CC ──
 function emailReport(period, detailed, token) {
-  _requireManager(token);
+  _requirePower(token, 'supViewMoney');   // manager, or a supervisor granted the money/reports view
   const to = String(getSettingValue('reportEmail') || '').trim();
   if (!to || to.indexOf('@') < 0) throw new Error('Set a reporting email in Reports first.');
   const cc = String(getSettingValue('reportCC') || '').trim();
