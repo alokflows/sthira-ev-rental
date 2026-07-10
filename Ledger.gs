@@ -78,7 +78,10 @@ function _backfillLedger() {
     const row = bData[i];
     if (!row[BC.BOOKING_ID]) continue;
     const status = String(row[BC.STATUS]);
-    if (status === 'Pending' || status === 'Cancelled') continue;
+    // Pending = nothing collected. A Cancelled booking that held money (Active cancel)
+    // must be backfilled like any collection + refund, or a fresh ledger drifts from
+    // accounting (which now counts it). Pending-cancelled rows have zero money → no-op.
+    if (status === 'Pending') continue;
     const id = String(row[BC.BOOKING_ID]);
     const opB = String(row[BC.OPERATOR_BOOKED] || '');
     const created = row[BC.CREATED_AT] ? new Date(row[BC.CREATED_AT]) : new Date();
@@ -86,6 +89,12 @@ function _backfillLedger() {
     if (Number(row[BC.RENT_UPI]))     events.push({ ts: created, type: 'RentIn',    direction: 'credit', amount: Number(row[BC.RENT_UPI]),     account: 'upi',  operator: opB, bookingId: id });
     if (Number(row[BC.DEPOSIT_CASH])) events.push({ ts: created, type: 'DepositIn', direction: 'credit', amount: Number(row[BC.DEPOSIT_CASH]), account: 'cash', operator: opB, bookingId: id });
     if (Number(row[BC.DEPOSIT_UPI]))  events.push({ ts: created, type: 'DepositIn', direction: 'credit', amount: Number(row[BC.DEPOSIT_UPI]),  account: 'upi',  operator: opB, bookingId: id });
+    // A Cancelled booking's refund (money handed back) — keyed to when it was cancelled.
+    if (status === 'Cancelled') {
+      const cts = row[BC.CANCELLED_AT] ? new Date(row[BC.CANCELLED_AT]) : created;
+      if (Number(row[BC.REFUND_CASH])) events.push({ ts: cts, type: 'Refund',        direction: 'debit', amount: Number(row[BC.REFUND_CASH]), account: 'cash', operator: opB, bookingId: id, note: 'Cancelled' });
+      if (Number(row[BC.REFUND_UPI]))  events.push({ ts: cts, type: 'DepositRefund', direction: 'debit', amount: Number(row[BC.REFUND_UPI]),  account: 'upi',  operator: opB, bookingId: id, note: 'Cancelled' });
+    }
     if (row[BC.ACTUAL_RETURN]) {
       const opR = String(row[BC.OPERATOR_RETURNED] || '');
       const ret = row[BC.ACTUAL_RETURN] ? new Date(row[BC.ACTUAL_RETURN]) : created;
@@ -143,7 +152,11 @@ function getDrawers(token, summary, bDataIn, hDataIn) {
     const row = bData[i];
     if (!row[BC.BOOKING_ID]) continue;
     const st = String(row[BC.STATUS]);
-    if (st === 'Pending' || st === 'Cancelled') continue;
+    // Pending = nothing collected. A Cancelled booking that held money (Active cancel)
+    // still holds its collected cash in the collector's drawer — the cancel's ledger
+    // refund reduces it below, so Σ drawers == cash on hand stays true. (Pending-cancelled
+    // rows have zero money columns, so counting them adds nothing.)
+    if (st === 'Pending') continue;
     // Cash physically sits with whoever COLLECTED it (OPERATOR_BOOKED).
     add(collected, baseName(row[BC.OPERATOR_BOOKED]), (Number(row[BC.RENT_CASH]) || 0) + (Number(row[BC.DEPOSIT_CASH]) || 0));
   }
@@ -417,7 +430,14 @@ function getLedger(period, offset, limit, token) {
   // neither (late fee / deduction withheld from a deposit) show no balance (null → "—").
   // A forward pass (oldest→newest) over the whole sheet feeds the newest-first page below.
   const openingCash = Number(getSettingValue('openingCashBalance')) || 0;
-  let cashRun = openingCash, upiRun = 0;
+  // Seed the running cash at openingCash ONLY when there's no explicit 'Opening' ledger
+  // row. A backfilled sheet has one (it credits openingCash into the run below), so also
+  // seeding here would count the opening balance twice. Mirrors runSelfAudit's hasOpeningRow.
+  let hasOpeningRow = false;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][LC.TXN_ID] && String(data[i][LC.TYPE]) === 'Opening') { hasOpeningRow = true; break; }
+  }
+  let cashRun = hasOpeningRow ? 0 : openingCash, upiRun = 0;
   const balByRow = {};
   for (let i = 1; i < data.length; i++) {
     if (!data[i][LC.TXN_ID]) continue;

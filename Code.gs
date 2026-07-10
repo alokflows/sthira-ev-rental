@@ -1,13 +1,29 @@
 // ─── Spreadsheet Helper ────────────────────────────────────────────────────────
 
+// True only while _ensureSetup() is actively building the schema. Lets _getSS()'s
+// recovery branch know a rebuild is already running (so it just returns the fresh
+// sheet instead of kicking off a second, nested rebuild). Resets each execution.
+let _setupBuilding = false;
+
 function _getSS() {
   const props = PropertiesService.getScriptProperties();
   const id = props.getProperty('SPREADSHEET_ID');
   if (id) {
     try { return SpreadsheetApp.openById(id); } catch(e) {}
   }
+  // Recovery path (only reached when there is no linked sheet, or it was deleted /
+  // unshared so openById threw). We create a fresh sheet — but its tabs went with the
+  // old file, so a stale SETUP_DONE would otherwise leave this blank sheet un-built.
+  // Clear the setup/migration guards and rebuild the schema now, so the in-flight
+  // read finds real tabs. The normal fast path never enters this branch, so steady
+  // state pays no extra cost. Guarded by _setupBuilding to avoid a nested rebuild.
   const ss = SpreadsheetApp.create('Sthira Rentals — Data');
   props.setProperty('SPREADSHEET_ID', ss.getId());
+  if (!_setupBuilding) {
+    ['SETUP_DONE', 'COLS_MIGRATED', 'MONEY_MIGRATED', 'CANCEL_MIGRATED']
+      .forEach(k => props.deleteProperty(k));
+    try { _ensureSetup(); } catch (e) { Logger.log('_getSS recovery rebuild failed: ' + e.message); }
+  }
   return ss;
 }
 
@@ -36,16 +52,51 @@ function _ensureSetup() {
       try { _backfillLedger(); } catch (e) { Logger.log('ledger backfill: ' + e.message); }
       props.setProperty('MONEY_MIGRATED', 'yes');
     }
+    // Cancel-refund schema: CancelledAt/CancelledBy on Bookings (append-only). Its own
+    // flag so it runs exactly once on an already-live sheet (COLS_MIGRATED is already set).
+    if (props.getProperty('CANCEL_MIGRATED') !== 'yes') {
+      _ensureCancelColumns();
+      props.setProperty('CANCEL_MIGRATED', 'yes');
+    }
     return;
   }
-  initializeSheets(); // creates sheet + tabs + headers + default settings + cottages
-  _ensureBookingColumns();
-  _ensureOperatorColumns();
-  _ensureHandoverColumns();
-  _ensureLedgerSheet();
-  props.setProperty('SETUP_DONE', 'yes');
-  props.setProperty('COLS_MIGRATED', 'yes');
-  props.setProperty('MONEY_MIGRATED', 'yes');
+  // Full build. Flag it so a _getSS() call made while building (the sheet is created
+  // inside initializeSheets) doesn't recursively trigger its own recovery rebuild.
+  _setupBuilding = true;
+  try {
+    initializeSheets(); // creates sheet + tabs + headers + default settings + cottages
+    _ensureBookingColumns();
+    _ensureCancelColumns();
+    _ensureOperatorColumns();
+    _ensureHandoverColumns();
+    _ensureLedgerSheet();
+    props.setProperty('SETUP_DONE', 'yes');
+    props.setProperty('COLS_MIGRATED', 'yes');
+    props.setProperty('MONEY_MIGRATED', 'yes');
+    props.setProperty('CANCEL_MIGRATED', 'yes');
+  } finally {
+    _setupBuilding = false;
+  }
+}
+
+// Migration: append the Active-cancel refund columns (CancelledAt, CancelledBy) to a
+// Bookings sheet made before they existed. Append-only (never reorders) so the positional
+// BC indices stay valid. Idempotent.
+function _ensureCancelColumns() {
+  try {
+    const sheet = _getSS().getSheetByName('Bookings');
+    if (!sheet || sheet.getLastColumn() === 0) return;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+    ['CancelledAt', 'CancelledBy'].forEach(h => {
+      if (headers.indexOf(h) === -1) {
+        sheet.getRange(1, sheet.getLastColumn() + 1)
+          .setValue(h).setFontWeight('bold').setBackground('#2F5D50').setFontColor('#FFFFFF');
+        headers.push(h);
+      }
+    });
+  } catch (e) {
+    Logger.log('_ensureCancelColumns failed: ' + e.message);
+  }
 }
 
 // Migration: append the handover approval columns to a Handovers sheet made before

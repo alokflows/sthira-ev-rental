@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS = {
   allowPastBookings:  'yes',          // 'yes' lets a manager add backdated bookings
   allowDeleteBookings:'no',           // 'yes' lets a manager soft-delete a booking (ledger stays). Off by default — grant in Settings.
   allowOperatorPastBookings: 'no',    // 'yes' lets the manager grant ordinary operators the "add past booking" ability too
+  allowOperatorCancelActive: 'no',    // 'yes' lets ordinary operators cancel a PAID (active) booking with a refund. Off by default — manager-only.
   // ── Supervisor powers (one shared set; a Supervisor gets ONLY what is 'yes' here) ──
   supViewAllBookings: 'no',           // supervisor: see all bookings + Overview/reports analytics
   supViewMoney:       'no',           // supervisor: full Money view + Reports + CSV export (read only, NO relieve/refund)
@@ -60,7 +61,8 @@ function getPublicSettings() {
     mapEmailFileId: s.mapEmailFileId         || '',   // map image the rider form previews
     managerLabel:   s.managerLabel           || 'Manager',
     rentalStartTime: _hhmm(s.rentalStartTime) || '09:00',
-    rentalEndTime:   _hhmm(s.rentalEndTime)   || '21:00'
+    rentalEndTime:   _hhmm(s.rentalEndTime)   || '21:00',
+    availableCount:  getPublicAvailableCount()   // scooters free right now (aggregate only)
   };
 }
 
@@ -122,7 +124,7 @@ function getAdminSettings(token) {
 const MANAGER_ONLY_SETTINGS = {
   dayRate: 1, depositPerWeek: 1, lateFeeMode: 1, lateFeePerHour: 1, graceMinutes: 1,
   rentalStartTime: 1, rentalEndTime: 1, openingCashBalance: 1, managerLabel: 1,
-  allowPastBookings: 1, allowDeleteBookings: 1, allowOperatorPastBookings: 1, reportEmail: 1, reportCC: 1,
+  allowPastBookings: 1, allowDeleteBookings: 1, allowOperatorPastBookings: 1, allowOperatorCancelActive: 1, reportEmail: 1, reportCC: 1,
   supViewAllBookings: 1, supViewMoney: 1, supRunBookings: 1, supDeleteBookings: 1
 };
 

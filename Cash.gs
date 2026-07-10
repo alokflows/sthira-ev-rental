@@ -35,9 +35,12 @@ function getAccountingSummary(token, bDataIn, hDataIn) {
     const row = bData[i];
     if (!row[BC.BOOKING_ID]) continue;
     const status = String(row[BC.STATUS]);
-    // Pending = nothing collected; Cancelled = voided. A soft-Deleted booking KEEPS
-    // its money in the books (the ledger is immutable) — it still counts below.
-    if (status === 'Pending' || status === 'Cancelled') continue;
+    // Pending = nothing collected. A soft-Deleted booking, AND a Cancelled booking that
+    // held money (Active cancel), KEEP their money in the books (the ledger is immutable
+    // and already carries the collect + refund rows) — so they must still count here, or
+    // accounting drifts below the ledger and Σ drawers != cash on hand. A Pending-cancelled
+    // booking has all-zero money columns, so counting it adds nothing.
+    if (status === 'Pending') continue;
 
     cashIn  += Number(row[BC.RENT_CASH])    || 0;
     cashIn  += Number(row[BC.DEPOSIT_CASH]) || 0;
@@ -51,14 +54,23 @@ function getAccountingSummary(token, bDataIn, hDataIn) {
       // Refunds are tallied from the ledger (see _refunds above), not here — that's what
       // lets standalone refunds count. Late fees/deductions still come from Bookings.
 
+      // Income == deposit − refund (the law): cap the reported late fee + deduction so
+      // their sum never exceeds what was actually withheld from the deposit. When the
+      // charges exceed the deposit the refund floors at ₹0 and the excess is uncollectable
+      // in this model — it must not be reported as income.
+      const dep      = Number(row[BC.DEPOSIT_AMOUNT]) || 0;
+      const refTot   = (Number(row[BC.REFUND_CASH]) || 0) + (Number(row[BC.REFUND_UPI]) || 0);
+      const withheld = Math.max(0, dep - refTot);
+      let lf = Math.min(Number(row[BC.LATE_FEE]) || 0, withheld);
+      let dd = Math.min(Number(row[BC.DEDUCTION_TOTAL]) || 0, withheld - lf);
       // Late fees are kept (not refunded), attribute to mode of deposit collection
       const depositMode = (Number(row[BC.DEPOSIT_CASH]) || 0) >= (Number(row[BC.DEPOSIT_UPI]) || 0) ? 'cash' : 'upi';
       if (depositMode === 'cash') {
-        lateFeesCash    += Number(row[BC.LATE_FEE])       || 0;
-        deductionsCash  += Number(row[BC.DEDUCTION_TOTAL]) || 0;
+        lateFeesCash    += lf;
+        deductionsCash  += dd;
       } else {
-        lateFeesUPI     += Number(row[BC.LATE_FEE])       || 0;
-        deductionsUPI   += Number(row[BC.DEDUCTION_TOTAL]) || 0;
+        lateFeesUPI     += lf;
+        deductionsUPI   += dd;
       }
     }
 
@@ -110,15 +122,33 @@ function getAccountingSummary(token, bDataIn, hDataIn) {
 
 // ── Today's quick accounting ─────────────────────────────────────────────────
 
-function getTodayAccounting(token, bDataIn) {
+function getTodayAccounting(token, bDataIn, ledDataIn) {
   requireAdmin(token);
   const today = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd');
   const bData = bDataIn || _getAllBookingsRaw();
 
+  // Cash/UPI collected TODAY is keyed to WHEN THE MONEY MOVED — the ledger timestamp —
+  // not the booking's creation date. Cash taken at a later confirm or extension (booking
+  // created on an earlier day) posts a ledger row today, so it shows on today. Keying to
+  // CREATED_AT dropped that money from every day's total. Money-in rows only (RentIn /
+  // DepositIn credits); refunds/transfers/relieves don't count as collections.
+  const ledData = ledDataIn || _ensureLedgerSheet().getDataRange().getValues();
   let todayCashIn = 0, todayUPIIn = 0;
+  for (let i = 1; i < ledData.length; i++) {
+    if (!ledData[i][LC.TXN_ID]) continue;
+    const ts = ledData[i][LC.TS]
+      ? Utilities.formatDate(new Date(ledData[i][LC.TS]), 'Asia/Kolkata', 'yyyy-MM-dd') : '';
+    if (ts !== today) continue;
+    const type = String(ledData[i][LC.TYPE]);
+    if (type !== 'RentIn' && type !== 'DepositIn') continue;
+    const amt = Number(ledData[i][LC.AMOUNT]) || 0, acct = String(ledData[i][LC.ACCOUNT]);
+    if (acct === 'cash') todayCashIn += amt; else if (acct === 'upi') todayUPIIn += amt;
+  }
+
+  // Booking/return COUNTS (and late fee / deduction) stay keyed to the booking rows:
+  // a "new booking today" is one created today; a "return today" settled today.
   let todayBookings = 0, todayReturns = 0;
   let todayLateFees = 0, todayDeductions = 0;
-
   for (let i = 1; i < bData.length; i++) {
     const row = bData[i];
     if (!row[BC.BOOKING_ID]) continue;
@@ -133,8 +163,6 @@ function getTodayAccounting(token, bDataIn) {
 
     if (createdDate === today && (status === 'Active' || status === 'Returned')) {
       todayBookings++;
-      todayCashIn += (Number(row[BC.RENT_CASH]) || 0) + (Number(row[BC.DEPOSIT_CASH]) || 0);
-      todayUPIIn  += (Number(row[BC.RENT_UPI])  || 0) + (Number(row[BC.DEPOSIT_UPI])  || 0);
     }
     if (returnDate === today && status === 'Returned') {
       todayReturns++;
@@ -177,7 +205,9 @@ function getOperatorMoney(token, bDataIn, hDataIn) {
     if (!row[BC.BOOKING_ID]) continue;
     if (baseName(row[BC.OPERATOR_BOOKED]) !== me) continue;
     const status = String(row[BC.STATUS]);
-    if (status === 'Pending' || status === 'Cancelled') continue;
+    // Pending = nothing collected. A Cancelled booking that held money (Active cancel)
+    // keeps counting — its collect + refund are already in the ledger/drawer.
+    if (status === 'Pending') continue;
     const rc = Number(row[BC.RENT_CASH]) || 0, ru = Number(row[BC.RENT_UPI]) || 0;
     const dc = Number(row[BC.DEPOSIT_CASH]) || 0, du = Number(row[BC.DEPOSIT_UPI]) || 0;
     cashIn += rc + dc; upiIn += ru + du;

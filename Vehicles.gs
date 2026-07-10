@@ -25,6 +25,17 @@ function _getVehiclesData() {
   return rows;
 }
 
+// Public (no auth) — ONLY the count of rental scooters free right now. No ids, no
+// PII, no booking data. Availability is defined exactly as the admin fleet view
+// (AdminJS availableVehicles): a Rental vehicle whose status is 'Available'
+// (i.e. not Out, Maintenance, or Staff). Folded into getPublicSettings so the
+// rider form gets it on its existing boot round-trip — no extra server call.
+function getPublicAvailableCount() {
+  return _getVehiclesData().filter(function (v) {
+    return v.status === 'Available' && v.type !== 'Staff';
+  }).length;
+}
+
 function addVehicle(label, vehicleType, notes, token) {
   requireAdmin(token);
   const sheet = _getVehiclesSheet();

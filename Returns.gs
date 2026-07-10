@@ -32,6 +32,12 @@ function processReturn(bookingId, returnData, token) {
   if (String(booking[BC.STATUS]) !== 'Active') throw new Error('Booking is not Active.');
 
   const rates         = resolveRatesForBooking();
+  // Late-fee day rate + deposit/week come from the booking's OWN snapshot (mirrors
+  // extendBooking) so a return is never repriced by a later Settings change; fall back
+  // to current rates only for legacy rows missing a snap. (lateFeeMode / lateFeePerHour /
+  // graceMinutes are not snapshotted — they use current Settings.)
+  const dayRate    = Number(booking[BC.DAY_RATE_SNAP])         || rates.dayRate;
+  const depPerWeek = Number(booking[BC.DEPOSIT_PER_WEEK_SNAP]) || rates.depositPerWeek;
   // The rental day runs until the configured end time (Settings → rentalEndTime,
   // default 21:00 IST). CHECK_OUT is stored as a plain "YYYY-MM-DD" string; build
   // the deadline explicitly so we don't let new Date() read it as 00:00 UTC
@@ -58,12 +64,15 @@ function processReturn(bookingId, returnData, token) {
       lateHours = Math.ceil(billableMinutes / 60);
 
       if (rates.lateFeeMode === 'fullExtraDay') {
+        // Charge per ACTUAL day late (not a flat +1): 2 days late = 2 extra days' rent,
+        // plus any deposit-week crossings the longer stay causes.
         const days = Number(booking[BC.DAYS]) || 1;
-        const newDays = days + 1;
-        const extraRent = rates.dayRate; // one extra day
+        const daysLate = Math.ceil(lateHours / 24);
+        const newDays = days + daysLate;
+        const extraRent = dayRate * daysLate;
         const newDepositWeeks = Math.ceil(newDays / 7);
         const oldDepositWeeks = Math.ceil(days / 7);
-        const extraDeposit = (newDepositWeeks - oldDepositWeeks) * rates.depositPerWeek;
+        const extraDeposit = (newDepositWeeks - oldDepositWeeks) * depPerWeek;
         lateFee = extraRent + extraDeposit;
       } else {
         // Per-hour, but CAPPED so being late never costs more than the extra days' rent
@@ -71,7 +80,7 @@ function processReturn(bookingId, returnData, token) {
         // model: a later return day is just another day. See B5_B6_PLAYBOOK Step 2.
         const perHour  = lateHours * rates.lateFeePerHour;
         const extraDays = Math.ceil(lateHours / 24);
-        const dayCap   = extraDays * rates.dayRate;
+        const dayCap   = extraDays * dayRate;
         lateFee = Math.min(perHour, dayCap);
       }
     }
@@ -153,9 +162,16 @@ function processReturn(bookingId, returnData, token) {
   // post to a non-cash 'income' account: visible in the passbook, but they must not
   // move the running cash balance (that would double-count what the smaller refund
   // already reflects). Only the actual refund pays out cash/UPI.
+  // Income == deposit − refund (the law): cap the posted late fee + deduction so their
+  // sum never exceeds what was actually withheld (deposit − refund). If the charges
+  // exceed the deposit, the refund floors at ₹0 and the excess is simply not collectable
+  // in this model — so it must not be booked as income.
+  const withheld       = Math.max(0, depositAmount - refundAmount);
+  const postedLateFee  = Math.min(lateFee, withheld);
+  const postedDeduction = Math.min(deductionTotal, withheld - postedLateFee);
   _appendLedgerRows([
-    { type: 'LateFeeIn',     direction: 'credit', amount: lateFee,        account: 'income', operator: opName, bookingId: bookingId },
-    { type: 'DeductionIn',   direction: 'credit', amount: deductionTotal, account: 'income', operator: opName, bookingId: bookingId },
+    { type: 'LateFeeIn',     direction: 'credit', amount: postedLateFee,   account: 'income', operator: opName, bookingId: bookingId },
+    { type: 'DeductionIn',   direction: 'credit', amount: postedDeduction, account: 'income', operator: opName, bookingId: bookingId },
     { type: 'Refund',        direction: 'debit',  amount: refundCash,     account: 'cash',   operator: opName, bookingId: bookingId },
     { type: 'DepositRefund', direction: 'debit',  amount: refundUPI,      account: 'upi',    operator: opName, bookingId: bookingId }
   ]);

@@ -88,7 +88,9 @@ function _rowToBooking(row) {
     refundTotal:     Number(row[BC.REFUND_TOTAL]) || 0,
     operatorReturned:String(row[BC.OPERATOR_RETURNED] || ''),
     returnNotes:     String(row[BC.RETURN_NOTES] || ''),
-    email:           String(row[BC.EMAIL] || '')
+    email:           String(row[BC.EMAIL] || ''),
+    cancelledAt:     _formatIST(row[BC.CANCELLED_AT]),
+    cancelledBy:     String(row[BC.CANCELLED_BY] || '')
   };
 }
 
@@ -445,31 +447,98 @@ function editBooking(bookingId, data, token) {
   }
 }
 
-function cancelBooking(bookingId, reason, operatorName, token) {
+// Cancel a booking.
+//  • Pending  — nothing was collected: a plain void (any operator), no refund.
+//  • Active   — money was already collected at confirm/extension. Dropping it silently
+//    (the old bug) left the cash in the ledger but out of accounting. Instead we settle
+//    it: the operator states how much cash / UPI to hand back (capped per channel to what
+//    was collected), a reason is required, the vehicle is freed, and immutable Ledger
+//    refund rows are appended. A Cancelled booking that held money now COUNTS in
+//    accounting + drawers (see getAccountingSummary/getDrawers) so Σ drawers == cash on
+//    hand stays true. Permission for an Active cancel: managers always; ordinary operators
+//    only when Settings → allowOperatorCancelActive is on.
+// refund: { cash, upi } — amounts (₹) to return to the guest for an Active cancel.
+function cancelBooking(bookingId, reason, refund, token) {
   requireAdmin(token);
-  const sheet = _getBookingsSheet();
-  const data  = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][BC.BOOKING_ID]) === bookingId) {
-      // Only a Pending or Active booking may be cancelled. Cancelling a Returned
-      // booking would flip it to Cancelled — which accounting excludes — silently
-      // dropping its collected cash/refunds from the books while the ledger keeps them.
-      const st = String(data[i][BC.STATUS]);
+  refund = refund || {};
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+    const sheet = _getBookingsSheet();
+    const data  = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][BC.BOOKING_ID]) !== bookingId) continue;
+      const booking = data[i];
+      // Only a Pending or Active booking may be cancelled. Cancelling a Returned booking
+      // would flip a settled record to Cancelled and re-derive its money incorrectly.
+      const st = String(booking[BC.STATUS]);
       if (st !== 'Pending' && st !== 'Active') {
         throw new Error('Only a pending or active booking can be cancelled.');
       }
-      if (st === 'Active') {
-        // Free up the vehicle
-        _setVehicleStatusById(String(data[i][BC.VEHICLE_ID]), 'Available');
+      const me = _opName(token) || '';
+
+      if (st === 'Pending') {
+        // Nothing collected yet — a plain void.
+        sheet.getRange(i + 1, BC.STATUS       + 1).setValue('Cancelled');
+        sheet.getRange(i + 1, BC.RETURN_NOTES + 1).setValue(reason || 'Cancelled');
+        sheet.getRange(i + 1, BC.CANCELLED_AT + 1).setValue(new Date());
+        sheet.getRange(i + 1, BC.CANCELLED_BY + 1).setValue(me);
+        _bumpDataVersion();
+        return { success: true, status: 'Cancelled' };
       }
-      sheet.getRange(i + 1, BC.STATUS         + 1).setValue('Cancelled');
-      sheet.getRange(i + 1, BC.RETURN_NOTES   + 1).setValue(reason || 'Cancelled');
-      sheet.getRange(i + 1, BC.OPERATOR_RETURNED + 1).setValue(operatorName || '');
+
+      // ── Active cancel — money was collected, so this pays a refund. ──
+      // Managers always; operators only via the Settings toggle (default off).
+      if (!_isManager(token) &&
+          String(getSettingValue('allowOperatorCancelActive') || 'no').toLowerCase() !== 'yes') {
+        throw new Error('Cancelling a paid (active) booking is a manager action. Ask the manager to enable it in Settings.');
+      }
+      if (!reason || !String(reason).trim()) {
+        throw new Error('A reason is required to cancel a paid booking.');
+      }
+      const collectedCash = (Number(booking[BC.RENT_CASH]) || 0) + (Number(booking[BC.DEPOSIT_CASH]) || 0);
+      const collectedUPI  = (Number(booking[BC.RENT_UPI])  || 0) + (Number(booking[BC.DEPOSIT_UPI])  || 0);
+      let refundCash = Math.round(Number(refund.cash) || 0);
+      let refundUPI  = Math.round(Number(refund.upi)  || 0);
+      if (refundCash < 0 || refundUPI < 0) throw new Error('Refund amounts cannot be negative.');
+      // Per-channel caps: never hand back more cash (or UPI) than was collected in that
+      // channel — that would drive the collector's drawer / cash on hand negative.
+      if (refundCash > collectedCash + 1) throw new Error('Cash refund (₹' + refundCash + ') cannot exceed the cash collected (₹' + collectedCash + ').');
+      if (refundUPI  > collectedUPI  + 1) throw new Error('UPI refund (₹' + refundUPI + ') cannot exceed the UPI collected (₹' + collectedUPI + ').');
+      refundCash = Math.min(refundCash, collectedCash);
+      refundUPI  = Math.min(refundUPI,  collectedUPI);
+
+      // Free the vehicle.
+      _setVehicleStatusById(String(booking[BC.VEHICLE_ID]), 'Available');
+
+      // Record the cancellation + refund. The REFUND_* columns hold the refund paid; the
+      // server-resolved actor + timestamp are stamped (never a client-sent name).
+      sheet.getRange(i + 1, BC.STATUS       + 1).setValue('Cancelled');
+      sheet.getRange(i + 1, BC.RETURN_NOTES + 1).setValue(String(reason).trim());
+      sheet.getRange(i + 1, BC.REFUND_CASH  + 1).setValue(refundCash);
+      sheet.getRange(i + 1, BC.REFUND_UPI   + 1).setValue(refundUPI);
+      sheet.getRange(i + 1, BC.REFUND_TOTAL + 1).setValue(refundCash + refundUPI);
+      sheet.getRange(i + 1, BC.CANCELLED_AT + 1).setValue(new Date());
+      sheet.getRange(i + 1, BC.CANCELLED_BY + 1).setValue(me);
+
+      // Immutable ledger refund rows — attributed to whoever COLLECTED the cash
+      // (OPERATOR_BOOKED), matching how getDrawers attributes the drawer that pays it,
+      // so Bookings- and Ledger-derived books stay reconcilable (mirrors extendBooking).
+      const payer = String(booking[BC.OPERATOR_BOOKED] || '') || me;
+      const note  = 'Cancelled · ' + String(reason).trim() + (me && me !== payer ? ' (by ' + me + ')' : '');
+      _appendLedgerRows([
+        { type: 'Refund',        direction: 'debit', amount: refundCash, account: 'cash', operator: payer, bookingId: bookingId, note: note },
+        { type: 'DepositRefund', direction: 'debit', amount: refundUPI,  account: 'upi',  operator: payer, bookingId: bookingId, note: note }
+      ]);
+
       _bumpDataVersion();
-      return { success: true };
+      return { success: true, status: 'Cancelled', refundCash: refundCash, refundUPI: refundUPI, refundTotal: refundCash + refundUPI };
     }
+    throw new Error('Booking not found.');
+  } finally {
+    lock.releaseLock();
   }
-  throw new Error('Booking not found.');
 }
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
@@ -518,6 +587,15 @@ function createBackdatedBooking(data, token) {
   const rentCash = Number(data.rentCash) || 0, rentUPI = Number(data.rentUPI) || 0;
   const depCash  = Number(data.depositCash) || 0, depUPI = Number(data.depositUPI) || 0;
   if (rentCash < 0 || rentUPI < 0 || depCash < 0 || depUPI < 0) throw new Error('Payment amounts cannot be negative.');
+  // The split must add up to the stated amounts — the same guard confirmBooking enforces.
+  // Without it a backdated row can post cash/UPI that disagrees with rent/deposit and fail
+  // runSelfAudit's per-booking reconciliation (and leave the Returned refund columns off).
+  if (Math.abs((rentCash + rentUPI) - rentAmount) > 1) {
+    throw new Error('Rent split (₹' + (rentCash + rentUPI) + ') must equal the rent (₹' + rentAmount + ').');
+  }
+  if (Math.abs((depCash + depUPI) - depositAmt) > 1) {
+    throw new Error('Deposit split (₹' + (depCash + depUPI) + ') must equal the deposit (₹' + depositAmt + ').');
+  }
 
   const status = (String(data.status) === 'Active') ? 'Active' : 'Returned';
   const createdAt = ymd(data.createdAt, checkIn);   // historical creation date
@@ -548,7 +626,7 @@ function createBackdatedBooking(data, token) {
     row[BC.EMAIL] = _sanitizeCell(data.email || '');
     if (status === 'Returned') {
       row[BC.ACTUAL_RETURN] = new Date(checkOut + 'T12:00:00');
-      row[BC.REFUND_CASH] = depCash; row[BC.REFUND_UPI] = depUPI; row[BC.REFUND_TOTAL] = depositAmt;
+      row[BC.REFUND_CASH] = depCash; row[BC.REFUND_UPI] = depUPI; row[BC.REFUND_TOTAL] = depCash + depUPI;
       row[BC.OPERATOR_RETURNED] = me + ' (backdated)';
     }
     _getBookingsSheet().appendRow(row);

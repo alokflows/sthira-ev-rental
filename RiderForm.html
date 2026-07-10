@@ -65,7 +65,7 @@
     </div>
     <div class="eyebrow">Agreement accepted</div>
     <h1 class="serif" style="font-size:32px;margin:8px 0 14px;line-height:1.15;">Thank you, <span id="okFirstName">rider</span>.<br>Your request is with the desk.</h1>
-    <p style="font-size:15px;color:var(--muted);line-height:1.6;margin:0 auto 28px;max-width:420px;">You've read and accepted all terms. Please proceed to the travel desk to verify your ID, collect your scooter and complete payment. A confirmation email follows once your scooter is allocated.</p>
+    <p style="font-size:15px;color:var(--muted);line-height:1.6;margin:0 auto 28px;max-width:420px;">You've read and accepted all terms. Please proceed to the travel desk to verify your ID, collect your scooter and complete payment.<span id="okEmailLine"></span></p>
     <div class="card" style="text-align:left;">
       <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:14px;border-bottom:1px solid var(--hair);">
         <span style="font-size:13px;color:var(--muted-2);">Reference</span>
@@ -76,7 +76,17 @@
       <div style="display:flex;justify-content:space-between;padding:11px 0;font-size:14px;"><span style="color:var(--muted-2);">Dates</span><span style="font-weight:600;" id="okDates">—</span></div>
       <div style="display:flex;justify-content:space-between;padding:11px 0 0;font-size:14px;"><span style="color:var(--muted-2);">Accepted at</span><span style="font-weight:600;" id="okAcceptedAt">—</span></div>
     </div>
-    <button id="resetBtn" class="btn btn-ghost" style="margin-top:26px;font-size:14px;">Start a new agreement</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:22px;">
+      <button id="waShareBtn" class="btn btn-primary" style="font-size:14px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.15-1.8-.9-2.08-1-.28-.1-.48-.15-.68.15s-.78 1-.96 1.2c-.18.2-.35.22-.65.08-.3-.15-1.27-.47-2.42-1.5-.9-.8-1.5-1.78-1.67-2.08-.18-.3-.02-.46.13-.6.13-.14.3-.35.44-.53.15-.2.2-.32.3-.53.1-.2.05-.38-.02-.53-.08-.15-.68-1.63-.93-2.24-.24-.58-.5-.5-.68-.5h-.58c-.2 0-.53.08-.8.38-.28.3-1.05 1.03-1.05 2.5s1.08 2.9 1.23 3.1c.15.2 2.12 3.24 5.15 4.54.72.3 1.28.5 1.72.64.72.23 1.38.2 1.9.12.58-.08 1.8-.73 2.05-1.44.25-.7.25-1.3.18-1.44-.07-.13-.27-.2-.57-.35zM12 2a10 10 0 0 0-8.5 15.3L2 22l4.8-1.5A10 10 0 1 0 12 2z"/></svg>
+        <span>Share on WhatsApp</span>
+      </button>
+      <button id="copyDetailsBtn" class="btn btn-ghost" style="font-size:14px;border:1px solid var(--line-3);">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        <span>Copy details</span>
+      </button>
+    </div>
+    <button id="resetBtn" class="btn btn-ghost" style="margin-top:16px;font-size:14px;">Start a new agreement</button>
   </div>
 
   <!-- ════════ FORM SCREEN ════════ -->
@@ -92,6 +102,12 @@
       <h1 class="serif" style="font-size:29px;line-height:1.14;margin:10px 0 0;letter-spacing:.2px;">Electric Two-Wheeler Rental Agreement</h1>
       <p style="font-size:14px;color:var(--muted);line-height:1.55;max-width:430px;margin:11px auto 0;">Read each term, accept all of them, then add your details — the desk handles the rest.</p>
     </header>
+
+    <!-- LIVE AVAILABILITY (count only; filled by RiderJS from getPublicSettings) -->
+    <div id="availBanner" class="hidden" style="display:flex;align-items:center;justify-content:center;gap:9px;margin:0 auto 26px;padding:9px 16px;max-width:max-content;border-radius:999px;font-size:13.5px;font-weight:600;background:var(--pine-tint);border:1px solid var(--pine-line);color:var(--pine-soft);">
+      <span id="availDot" style="width:8px;height:8px;border-radius:50%;background:var(--pine-soft);flex:none;"></span>
+      <span id="availText"></span>
+    </div>
 
     <!-- HOW IT WORKS -->
     <div class="how">
@@ -165,7 +181,7 @@
         </div>
         <div class="col-span">
           <label class="field-label" for="f-email">Email <span style="color:var(--muted-2);font-weight:500;">— optional</span></label>
-          <input id="f-email" class="field" type="email" placeholder="Add it to receive your confirmation, guidelines &amp; map" autocomplete="email">
+          <input id="f-email" class="field" type="email" placeholder="Enter your email to receive a confirmation once the desk confirms" autocomplete="email">
         </div>
         <div class="col-span" id="rentalsWindowNote" style="font-size:13px;color:var(--txt-2);background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:11px;padding:11px 14px;"></div>
         <div>

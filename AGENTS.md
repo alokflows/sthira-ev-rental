@@ -110,7 +110,7 @@ The live account, scriptId, deploymentId, and exec URL are kept out of source co
   Cash.gs, `VC` in Setup.gs, `HC`/`LC` in Ledger.gs). Never reorder, insert, or rename a column. To add one:
   append at the end + an idempotent `_ensureXxxColumns()` migration guarded by a script property.
 - **The `Ledger` tab is immutable.** Append only via `_appendLedgerRows`. Never edit or delete a past row.
-- Script properties: `DATA_VERSION`, `SETUP_DONE`, `COLS_MIGRATED`, `MONEY_MIGRATED`, `PIN_SECRET`.
+- Script properties: `SPREADSHEET_ID`, `DATA_VERSION`, `SETUP_DONE`, `COLS_MIGRATED`, `MONEY_MIGRATED`, `PIN_SECRET`.
 
 ---
 

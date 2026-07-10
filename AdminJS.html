@@ -727,6 +727,7 @@
         +'<div><label class="field-label">Desk opens</label><input id="set-start" class="field" type="time" value="'+esc(s.rentalStartTime||'09:00')+'"></div>'
         +'<div><label class="field-label">Return by (late after)</label><input id="set-end" class="field" type="time" value="'+esc(s.rentalEndTime||'21:00')+'"></div></div>'
         +'<div style="font-size:12.5px;color:var(--muted-2);margin-top:10px;">Rentals run '+esc(s.rentalStartTime||'09:00')+'–'+esc(s.rentalEndTime||'21:00')+'. Returns after the end time incur a late fee (after the grace window). This window also shows on the guest form.</div>'
+        +((String(s.lateFeeMode||'perHour')!=='fullExtraDay' && (Number(s.lateFeePerHour)||0)===0)?'<div style="font-size:12.5px;color:var(--gold-deep);background:var(--gold-tint);border:1px solid var(--gold);border-radius:10px;padding:9px 12px;margin-top:10px;">Late fee / hour is ₹0 — late returns are currently <b>free</b>. Set a rate above to start charging.</div>':'')
         +'<button class="btn btn-primary" data-action="save-pricing" style="margin-top:16px;">Save pricing &amp; timings</button>');
     var gCottages=card('Cottages / accommodations','These populate the guest form dropdown.',
           cotRows+'<div style="display:flex;gap:8px;margin-top:14px;"><input id="cot-newname" class="field" placeholder="Add a cottage…"><button class="btn btn-primary" data-action="cot-add" style="padding:12px 18px;">Add</button></div>');
@@ -739,7 +740,8 @@
           '<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;margin-bottom:12px;"><input id="set-allow-past" type="checkbox" '+(String(s.allowPastBookings||'yes').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Allow adding past (backdated) bookings</label>'
         +'<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;margin-bottom:12px;"><input id="set-allow-delete" type="checkbox" '+(String(s.allowDeleteBookings||'no').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Allow deleting bookings <span style="font-weight:500;color:var(--muted-2);">(the ledger is always kept)</span></label>'
         +'<div style="border-top:1px solid var(--hair);margin:6px 0 12px;padding-top:14px;"><div style="font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;">Grant to operators</div>'
-        +'<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;"><input id="set-allow-op-past" type="checkbox" '+(String(s.allowOperatorPastBookings||'no').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Let operators add past bookings too <span style="font-weight:500;color:var(--muted-2);">(otherwise manager-only)</span></label></div>'
+        +'<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;margin-bottom:12px;"><input id="set-allow-op-past" type="checkbox" '+(String(s.allowOperatorPastBookings||'no').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Let operators add past bookings too <span style="font-weight:500;color:var(--muted-2);">(otherwise manager-only)</span></label>'
+        +'<label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--txt-2);cursor:pointer;"><input id="set-allow-op-cancel" type="checkbox" '+(String(s.allowOperatorCancelActive||'no').toLowerCase()==='yes'?'checked':'')+' style="width:18px;height:18px;">Let operators cancel paid (active) bookings <span style="font-weight:500;color:var(--muted-2);">(refunds the guest; otherwise manager-only)</span></label></div>'
         +'<button class="btn btn-primary" data-action="save-powers" style="margin-top:6px;">Save powers</button>');
 
     // Supervisor powers (manager-only) — one shared grant set for all supervisors.
@@ -928,10 +930,14 @@
     var grace=Number(s.graceMinutes||0), diffMin=Math.floor((now-deadline)/60000);
     if(diffMin<=grace) return { days:0, lateFee:0 };
     var lateHours=Math.ceil((diffMin-grace)/60);
-    var dayRate=Number(s.dayRate||300), extraDays=Math.ceil(lateHours/24), lateFee;
+    // Day rate + deposit/week come from the booking's OWN snapshot (mirrors the server's
+    // Returns.gs), falling back to current settings only for legacy rows without a snap —
+    // so the preview matches what the server will charge on a return.
+    var dayRate=Number(b.dayRateSnap)||Number(s.dayRate||300), extraDays=Math.ceil(lateHours/24), lateFee;
     if(String(s.lateFeeMode||'perHour')==='fullExtraDay'){
-      var d=Number(b.days)||1, depPerW=Number(s.depositPerWeek||2000);
-      lateFee=dayRate + (Math.ceil((d+1)/7)-Math.ceil(d/7))*depPerW;
+      // Charge per ACTUAL day late (not a flat +1), plus any deposit-week crossings.
+      var d=Number(b.days)||1, depPerW=Number(b.depositPerWeekSnap)||Number(s.depositPerWeek||2000);
+      lateFee=dayRate*extraDays + (Math.ceil((d+extraDays)/7)-Math.ceil(d/7))*depPerW;
     } else {
       // No fallback — late fee defaults to plain 0 (no charge) unless a rate is set.
       var lfph=Number(s.lateFeePerHour)||0;
@@ -943,21 +949,32 @@
     var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
     if(!b){ flash('Booking not found — refreshing.', true); silentRefresh(); return; }
     window._returnCtx={ b:b };
-    var lp=lateFeePreview(b), dep=Number(b.depositAmount)||0;
-    var lateRow=lp.lateFee>0
-      ? '<div class="sr"><span style="color:var(--muted);">Late fee · '+lp.days+' day'+(lp.days>1?'s':'')+' overdue</span><span style="font-weight:600;color:var(--terra);">− '+inr(lp.lateFee)+'</span></div>'
-      : '<div class="sr"><span style="color:var(--muted);">Late fee</span><span style="font-weight:600;color:var(--pine-soft);">on time · ₹0</span></div>';
+    var dep=Number(b.depositAmount)||0;
     var body='<div style="display:flex;gap:11px;align-items:center;background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:13px;padding:13px 15px;margin-bottom:16px;"><span style="flex:none;color:var(--pine);display:flex;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 5 5v2"/></svg></span><div style="font-size:13.5px;color:var(--txt-2);">Returning <b>'+esc(b.vehicleLabel||'—')+'</b> · due '+esc(b.checkOut)+'.</div></div>'
       +'<label class="field-label">Damage / cleaning deduction (₹)</label><input id="rt-damage" class="field" type="number" min="0" placeholder="0">'
       +'<label class="field-label" style="margin-top:16px;">Condition notes</label><textarea id="rt-note" class="field" rows="2" placeholder="Scratches, battery level, helmet returned…" style="resize:none;"></textarea>'
       +'<div class="summary" style="background:var(--pine-tint);border-color:var(--pine-line);"><div class="sr"><span style="color:var(--muted);">Deposit held</span><span style="font-weight:600;">'+inr(dep)+'</span></div>'
       +'<div class="sr"><span style="color:var(--muted);">Damage / cleaning</span><span id="rt-dmg-lbl" style="font-weight:600;color:var(--terra);">− ₹0</span></div>'
-      +lateRow
-      +'<div class="sr total"><span style="font-weight:600;">Refund to guest</span><span class="amt" id="rt-refund" style="color:var(--pine);">'+inr(Math.max(0,dep-lp.lateFee))+'</span></div></div>';
+      +'<div class="sr" id="rt-late"></div>'
+      +'<div class="sr total"><span style="font-weight:600;">Refund to guest</span><span class="amt" id="rt-refund" style="color:var(--pine);">'+inr(dep)+'</span></div></div>';
     var footer='<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="rt-submit">Settle &amp; refund</button>';
     openModal('Process return', b.riderName+' · '+(b.vehicleLabel||'—')+' · '+b.bookingId, body, footer);
-    window._returnCtx.lateFee=lp.lateFee;
-    $('rt-damage').oninput=function(){ var dmg=Number(val('rt-damage'))||0; $('rt-dmg-lbl').textContent='− '+inr(dmg); $('rt-refund').textContent=inr(Math.max(0,dep-dmg-lp.lateFee)); };
+    // Recompute the late fee LIVE — the preview is otherwise frozen at modal-open time and
+    // goes stale as minutes pass (a grace-window or hour-tick crossing), so the operator
+    // could see one late fee and the server charge another at submit. Refresh on every
+    // damage keystroke and on a ticking timer; the timer self-clears once the modal closes.
+    function updateReturnPreview(){
+      var lateEl=$('rt-late'); if(!lateEl){ if(window._returnCtx&&window._returnCtx.timer){ clearInterval(window._returnCtx.timer); window._returnCtx.timer=null; } return; }
+      var lp=lateFeePreview(b); window._returnCtx.lateFee=lp.lateFee;
+      lateEl.innerHTML=lp.lateFee>0
+        ? '<span style="color:var(--muted);">Late fee · '+lp.days+' day'+(lp.days>1?'s':'')+' overdue</span><span style="font-weight:600;color:var(--terra);">− '+inr(lp.lateFee)+'</span>'
+        : '<span style="color:var(--muted);">Late fee</span><span style="font-weight:600;color:var(--pine-soft);">on time · ₹0</span>';
+      var dmg=Number(val('rt-damage'))||0; $('rt-dmg-lbl').textContent='− '+inr(dmg);
+      $('rt-refund').textContent=inr(Math.max(0,dep-dmg-lp.lateFee));
+    }
+    $('rt-damage').oninput=updateReturnPreview;
+    window._returnCtx.timer=setInterval(updateReturnPreview, 20000);
+    updateReturnPreview();
   }
   function submitReturn(){
     var b=window._returnCtx.b, dmg=Number(val('rt-damage'))||0, note=val('rt-note');
@@ -989,12 +1006,58 @@
   }
 
   // ── Cancel ──
+  // Pending: a plain void (nothing collected). Active: money was already taken, so the
+  // operator states how much cash / UPI to hand back (capped to what was collected) and
+  // a reason is required — the server settles it and posts ledger refund rows.
   function openCancel(bookingId){
-    var body='<p style="font-size:14px;color:var(--muted);margin:0 0 14px;">This cancels the booking and frees its scooter (if assigned). This cannot be undone.</p><label class="field-label">Reason (optional)</label><input id="cancel-reason" class="field" placeholder="e.g. guest no-show">';
-    openModal('Cancel booking', bookingId, body, '<button class="btn-ghost-lg" data-action="modal-close">Keep booking</button><button class="btn-lg danger" data-action="cancel-submit">Cancel booking</button>');
-    window._cancelId=bookingId;
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(!b){ flash('Booking not found — refreshing.', true); silentRefresh(); return; }
+    window._cancelCtx={ b:b };
+    if(b.status!=='Active'){
+      var body='<p style="font-size:14px;color:var(--muted);margin:0 0 14px;">This cancels the booking and frees its scooter (if assigned). This cannot be undone.</p><label class="field-label">Reason (optional)</label><input id="cancel-reason" class="field" placeholder="e.g. guest no-show">';
+      openModal('Cancel booking', bookingId, body, '<button class="btn-ghost-lg" data-action="modal-close">Keep booking</button><button class="btn-lg danger" data-action="cancel-submit">Cancel booking</button>');
+      return;
+    }
+    var colCash=(Number(b.rentCash)||0)+(Number(b.depositCash)||0), colUPI=(Number(b.rentUPI)||0)+(Number(b.depositUPI)||0);
+    window._cancelCtx.colCash=colCash; window._cancelCtx.colUPI=colUPI;
+    var body='<div style="display:flex;gap:11px;align-items:center;background:var(--terra-tint);border:1px solid var(--terra);border-radius:13px;padding:12px 15px;margin-bottom:16px;"><div style="font-size:13px;color:var(--terra);font-weight:600;">This booking already collected money. Choose how much to refund the guest, then cancel.</div></div>'
+      +'<div class="summary" style="margin-bottom:6px;"><div class="sr"><span style="color:var(--muted);">Collected · cash</span><span style="font-weight:600;">'+inr(colCash)+'</span></div>'
+      +'<div class="sr"><span style="color:var(--muted);">Collected · UPI</span><span style="font-weight:600;">'+inr(colUPI)+'</span></div></div>'
+      +'<div class="gf" style="margin-top:14px;">'
+      +'<div><label class="field-label">Refund cash (₹)</label><input id="cancel-rcash" class="field" type="number" min="0" max="'+colCash+'" value="'+colCash+'"></div>'
+      +'<div><label class="field-label">Refund UPI (₹)</label><input id="cancel-rupi" class="field" type="number" min="0" max="'+colUPI+'" value="'+colUPI+'"></div></div>'
+      +'<div id="cancel-note" style="font-size:12.5px;margin-top:8px;"></div>'
+      +'<label class="field-label" style="margin-top:14px;">Reason *</label><input id="cancel-reason" class="field" placeholder="Why is this being cancelled?">';
+    openModal('Cancel booking', b.riderName+' · '+bookingId, body, '<button class="btn-ghost-lg" data-action="modal-close">Keep booking</button><button class="btn-lg danger" data-action="cancel-submit">Cancel &amp; refund</button>');
+    ['cancel-rcash','cancel-rupi'].forEach(function(idd){ var el=$(idd); if(el) el.oninput=cancelNote; });
+    cancelNote();
   }
-  function submitCancel(){ flash('Cancelling…'); return call('cancelBooking',[window._cancelId, val('cancel-reason')||'Cancelled', A.operator, A.token]).then(function(){ closeModal(); flash('Booking cancelled.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); }); }
+  function cancelNote(){
+    var ctx=window._cancelCtx; if(!ctx||!ctx.b||ctx.b.status!=='Active') return;
+    var rc=Number(val('cancel-rcash'))||0, ru=Number(val('cancel-rupi'))||0, note=$('cancel-note'); if(!note) return;
+    if(rc>ctx.colCash){ note.textContent='Cash refund exceeds the '+inr(ctx.colCash)+' collected.'; note.style.color='var(--terra)'; }
+    else if(ru>ctx.colUPI){ note.textContent='UPI refund exceeds the '+inr(ctx.colUPI)+' collected.'; note.style.color='var(--terra)'; }
+    else { note.textContent='Refunding '+inr(rc+ru)+' · keeping '+inr((ctx.colCash+ctx.colUPI)-(rc+ru))+'.'; note.style.color='var(--muted-2)'; }
+  }
+  function submitCancel(){
+    var ctx=window._cancelCtx||{}, b=ctx.b, active=(b&&b.status==='Active');
+    var reason=val('cancel-reason');
+    var refund=null;
+    if(active){
+      if(!reason){ flash('A reason is required to cancel a paid booking.', true); return; }
+      var rc=Number(val('cancel-rcash'))||0, ru=Number(val('cancel-rupi'))||0;
+      if(rc<0||ru<0){ flash('Refund amounts cannot be negative.', true); return; }
+      if(rc>ctx.colCash+1){ flash('Cash refund cannot exceed the cash collected ('+inr(ctx.colCash)+').', true); return; }
+      if(ru>ctx.colUPI+1){ flash('UPI refund cannot exceed the UPI collected ('+inr(ctx.colUPI)+').', true); return; }
+      refund={ cash:rc, upi:ru };
+    }
+    flash('Cancelling…');
+    return call('cancelBooking',[window._cancelCtx.b.bookingId, reason||'Cancelled', refund, A.token]).then(function(res){
+      closeModal();
+      flash((res&&res.refundTotal>0)?('Booking cancelled · '+inr(res.refundTotal)+' refunded.'):'Booking cancelled.');
+      silentRefresh();
+    }).catch(function(e){ flash(errMsg(e), true); });
+  }
 
   // ── Extend (move the return date later) ──
   // Recomputes days/rent/deposit on the booking's own snapshot rates and (for an Active
@@ -1237,7 +1300,7 @@
   }
   function submitDeleteBooking(){ flash('Deleting…'); return call('deleteBooking',[window._delId, A.token]).then(function(res){ closeModal(); flash('Record deleted · '+(res.riderName||'')); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); }); }
   function settingsSetEmail(id){ var em=val('op-email-'+id); flash('Saving…'); return call('setOperatorEmail',[id, em, A.token]).then(function(){ flash('Email saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
-  function savePowers(){ var u={ allowPastBookings:$('set-allow-past').checked?'yes':'no', allowDeleteBookings:$('set-allow-delete').checked?'yes':'no', allowOperatorPastBookings:$('set-allow-op-past').checked?'yes':'no' }; C.settings.allowPastBookings=u.allowPastBookings; C.settings.allowDeleteBookings=u.allowDeleteBookings; C.settings.allowOperatorPastBookings=u.allowOperatorPastBookings; flash('Saving…'); return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Manager powers saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+  function savePowers(){ var u={ allowPastBookings:$('set-allow-past').checked?'yes':'no', allowDeleteBookings:$('set-allow-delete').checked?'yes':'no', allowOperatorPastBookings:$('set-allow-op-past').checked?'yes':'no', allowOperatorCancelActive:$('set-allow-op-cancel').checked?'yes':'no' }; C.settings.allowPastBookings=u.allowPastBookings; C.settings.allowDeleteBookings=u.allowDeleteBookings; C.settings.allowOperatorPastBookings=u.allowOperatorPastBookings; C.settings.allowOperatorCancelActive=u.allowOperatorCancelActive; flash('Saving…'); return call('updateMultipleSettings',[u, A.operator, A.token]).then(function(){ flash('Manager powers saved.'); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
 
   // ── Add vehicle ──
   function openAddVehicle(){
@@ -1266,8 +1329,13 @@
       +detailSection('Rental',[ detailRow('Scooter', b.vehicleLabel), detailRow('Check-in', b.checkIn), detailRow('Return by', b.checkOut), detailRow('Duration', b.days?b.days+' day(s)':''), detailRow('Booked on', b.createdAt) ])
       +detailSection('Money',[ detailRow('Rent', inr(b.rentAmount)), detailRow('Deposit (held)', inr(b.depositAmount)), detailRow('Total', inr(b.totalAmount)), detailRow('Paid by', (b.status!=='Pending'?payMode:'')), detailRow('Late fee', b.lateFee?inr(b.lateFee):''), detailRow('Deductions', b.deductionTotal?inr(b.deductionTotal):''), detailRow('Refunded', b.refundTotal?inr(b.refundTotal):'') ])
       +detailSection('Handled by',[ detailRow('Booked by', b.operatorBooked), detailRow('Terms accepted', b.consentAt), detailRow('Returned by', b.operatorReturned), detailRow('Returned at', b.actualReturn), detailRow('Notes', b.returnNotes) ]);
+    // A Cancelled booking shows who cancelled it, when, why, and what was refunded.
+    if(b.status==='Cancelled'){
+      body+=detailSection('Cancellation',[ detailRow('Cancelled by', b.cancelledBy), detailRow('Cancelled at', b.cancelledAt), detailRow('Reason', b.returnNotes), detailRow('Refund · cash', (Number(b.refundCash)||0)?inr(b.refundCash):''), detailRow('Refund · UPI', (Number(b.refundUPI)||0)?inr(b.refundUPI):''), detailRow('Refund total', (Number(b.refundTotal)||0)?inr(b.refundTotal):'') ]);
+    }
     var idA=esc(b.bookingId);
     if(b.status==='Deleted') body='<div style="background:var(--terra-tint);border:1px solid var(--terra);border-radius:12px;padding:11px 14px;font-size:13px;color:var(--terra);font-weight:600;margin-bottom:14px;">'+esc(b.returnNotes||('Record deleted · '+b.riderName))+'. The money remains in the ledger.</div>'+body;
+    if(b.status==='Cancelled') body='<div style="background:var(--terra-tint);border:1px solid var(--terra);border-radius:12px;padding:11px 14px;font-size:13px;color:var(--terra);font-weight:600;margin-bottom:14px;">Cancelled'+(b.cancelledBy?' by '+esc(b.cancelledBy):'')+(b.cancelledAt?' · '+esc(b.cancelledAt):'')+((Number(b.refundTotal)||0)?' · '+inr(b.refundTotal)+' refunded':'')+'.</div>'+body;
     // Footer is built in deliberate order: destructive actions on the left, the single
     // primary action on the right — no duplicate Close (the top ✕ and tapping outside both
     // close). Compact secondary buttons keep it from becoming a wall of fat buttons.
@@ -1280,13 +1348,17 @@
     // (Print, Extend) ending in the single primary. Delete is manager-only AND gated
     // by the Settings power. Edit/Cancel only make sense while a booking is live.
     var canDelete=can('supDeleteBookings') && b.status!=='Deleted' && String((C.settings&&C.settings.allowDeleteBookings)||'').toLowerCase()==='yes';
+    // Cancelling a PAID (active) booking pays a refund — managers always; operators only
+    // when the Settings toggle grants it (the server is the real gate). A pending cancel
+    // is a plain void, always allowed.
+    var canCancelActive=isMgr() || String((C.settings&&C.settings.allowOperatorCancelActive)||'').toLowerCase()==='yes';
     if(canDelete) left+='<button class="sec danger" data-action="bk-delete" data-id="'+idA+'">'+I_TRASH+'Delete</button>';
     if(b.status==='Pending' || b.status==='Active') left+='<button class="sec" data-action="ed-from-details" data-id="'+idA+'">'+I_EDIT+'Edit</button>';
     if(b.status==='Pending'){
       left+='<button class="sec danger" data-action="cn-from-details" data-id="'+idA+'">Cancel</button>';
       primary='<button class="pri" data-action="cf-from-details" data-id="'+idA+'">Confirm booking</button>';
     } else if(b.status==='Active'){
-      left+='<button class="sec danger" data-action="cn-from-details" data-id="'+idA+'">Cancel</button>';
+      if(canCancelActive) left+='<button class="sec danger" data-action="cn-from-details" data-id="'+idA+'">Cancel</button>';
       right+='<button class="sec" data-action="bk-receipt" data-id="'+idA+'">'+I_PRINT+'Print receipt</button>';
       right+='<button class="sec" data-action="ex-from-details" data-id="'+idA+'">'+I_EXT+'Extend</button>';
       primary='<button class="pri" data-action="rt-from-details" data-id="'+idA+'">Process return</button>';

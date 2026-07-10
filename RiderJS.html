@@ -8,6 +8,7 @@
   var undertaking = false;
   var rates = { dayRate: 300, depositPerWeek: 2000 };
   var submitting = false;
+  var lastBooking = null;          // { res, payload } — powers Share / Copy on the success screen
   var toastTimer = null;
   // Kiosk mode (?kiosk=1): after a guest submits, auto-return to a blank form for the next person.
   var KIOSK = /[?&]kiosk=1/.test(location.search);
@@ -19,7 +20,8 @@
   ['formScreen','successScreen','termsContainer','termCount','undertakingToggle','undertakingCard',
    'footerBar','accCount','accTotal','footerHint','progFill','submitBtn','submitLabel','submitArrow',
    'toast','mapSection','mapImg','pricePreview','priceDays','priceRent','priceDep','resetBtn',
-   'okFirstName','okRef','okRider','okCottage','okDates','okAcceptedAt'].forEach(function (k) { els[k] = $(k); });
+   'okFirstName','okRef','okRider','okCottage','okDates','okAcceptedAt','okEmailLine',
+   'availBanner','availDot','availText','waShareBtn','copyDetailsBtn'].forEach(function (k) { els[k] = $(k); });
 
   var FIELDS = {
     name:      $('f-name'),
@@ -236,7 +238,69 @@
     els.submitArrow.classList.toggle('hidden', on);
   }
 
+  // ── Live availability banner ─────────────────────────────────────────────
+  // n = count of scooters free right now (from getPublicSettings). 0 shows an
+  // honest "none free" state rather than hiding the banner.
+  function renderAvailability(n) {
+    if (!els.availBanner) return;
+    if (n == null || isNaN(n)) { els.availBanner.classList.add('hidden'); return; }
+    n = Math.max(0, Math.round(Number(n)));
+    var free = n > 0;
+    els.availText.textContent = free
+      ? (n + (n === 1 ? ' scooter' : ' scooters') + ' free right now')
+      : 'No scooters free right now — the desk can advise on the wait';
+    els.availBanner.style.background  = free ? 'var(--pine-tint)' : 'var(--terra-tint)';
+    els.availBanner.style.borderColor = free ? 'var(--pine-line)' : 'var(--terra-tint)';
+    els.availBanner.style.color       = free ? 'var(--pine-soft)' : 'var(--terra)';
+    els.availDot.style.background     = free ? 'var(--pine-soft)' : 'var(--terra)';
+    els.availBanner.classList.remove('hidden');
+  }
+
+  // ── Share / copy the booking on the success screen ───────────────────────
+  // Plain-text summary: id, name, dates, vehicle type, price. Used by both the
+  // guest's own WhatsApp share (wa.me with NO business number) and copy-to-clipboard.
+  function bookingShareText() {
+    if (!lastBooking) return '';
+    var r = lastBooking.res, p = lastBooking.payload;
+    return [
+      'Sthira EV Rental — booking request',
+      'Ref: ' + (r.bookingId || '—'),
+      'Rider: ' + p.riderName,
+      'Cottage: ' + (p.cottageName || '—'),
+      'Dates: ' + fmtShort(p.checkIn) + ' → ' + fmtShort(p.checkOut) + ' (' + p.days + (p.days === 1 ? ' day' : ' days') + ')',
+      'Vehicle: Electric scooter',
+      'Estimate: ' + inr(r.rentAmount) + ' rent + ' + inr(r.depositAmount) + ' deposit (pay at the desk)'
+    ].join('\n');
+  }
+
+  function shareWhatsApp() {
+    var t = bookingShareText();
+    if (!t) return;
+    // No phone number → wa.me opens the guest's own chat/share picker.
+    window.open('https://wa.me/?text=' + encodeURIComponent(t), '_blank');
+  }
+
+  function copyDetails() {
+    var t = bookingShareText();
+    if (!t) return;
+    function done() { flash('Details copied.'); }
+    function fallback() {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        done();
+      } catch (e) { flash('Could not copy — please copy the details manually.'); }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(done, fallback);
+    } else { fallback(); }
+  }
+
   function showSuccess(res, payload) {
+    lastBooking = { res: res, payload: payload };
     var first = (payload.riderName || 'rider').split(' ')[0];
     var now = new Date();
     els.okFirstName.textContent = first;
@@ -245,6 +309,14 @@
     els.okCottage.textContent = payload.cottageName || '—';
     els.okDates.textContent = fmtShort(payload.checkIn) + ' → ' + fmtShort(payload.checkOut);
     els.okAcceptedAt.textContent = now.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+
+    // Honest email copy: only promise an email if the guest actually gave one (and the
+    // confirmation is sent when the desk confirms — see Bookings.gs / Email.gs).
+    if (els.okEmailLine) {
+      els.okEmailLine.textContent = payload.email
+        ? ' A confirmation email will arrive at ' + payload.email + ' once the desk confirms your booking.'
+        : '';
+    }
 
     els.formScreen.classList.add('hidden');
     els.footerBar.classList.add('hidden');
@@ -256,12 +328,13 @@
 
   function reset() {
     clearTimeout(kioskTimer);
-    accepted = {}; undertaking = false; submitting = false;
+    accepted = {}; undertaking = false; submitting = false; lastBooking = null;
     Object.keys(FIELDS).forEach(function (k) { if (k !== 'cottage') FIELDS[k].value = ''; });
     els.undertakingToggle.classList.remove('on');
     els.undertakingCard.style.background = 'var(--paper-hi)';
     els.undertakingCard.style.borderColor = 'var(--line-3)';
     els.pricePreview.classList.add('hidden');
+    prefillDates();
     renderTerms();
     els.successScreen.classList.add('hidden');
     els.formScreen.classList.remove('hidden');
@@ -385,18 +458,33 @@
     if (!list || !list.length) { ph.textContent = 'Ask the desk to add cottages'; }
   }
 
-  // ── Boot ───────────────────────────────────────────────────────────────
-  function boot() {
-    // min check-in = today
-    var today = new Date();
-    var iso = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+  function todayIso() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  // Default both dates to today and show an instant price — but never clobber values
+  // the browser restored (bfcache / back-navigation) or the guest already picked.
+  function prefillDates() {
+    var iso = todayIso();
     FIELDS.checkin.min = iso;
     FIELDS.checkout.min = iso;
+    if (!FIELDS.checkin.value)  FIELDS.checkin.value  = iso;
+    if (!FIELDS.checkout.value) FIELDS.checkout.value = FIELDS.checkin.value || iso;
+    FIELDS.checkout.min = FIELDS.checkin.value || iso;
+    updatePrice();
+  }
+
+  // ── Boot ───────────────────────────────────────────────────────────────
+  function boot() {
+    prefillDates();
 
     // wire static handlers
     els.undertakingToggle.addEventListener('click', toggleUndertaking);
     els.submitBtn.addEventListener('click', submit);
     els.resetBtn.addEventListener('click', reset);
+    if (els.waShareBtn) els.waShareBtn.addEventListener('click', shareWhatsApp);
+    if (els.copyDetailsBtn) els.copyDetailsBtn.addEventListener('click', copyDetails);
     wireMapZoom();
     var rtb = document.getElementById('riderThemeBtn');
     if (rtb) { setRiderThemeIcon(); rtb.addEventListener('click', toggleRiderTheme); }
@@ -412,7 +500,7 @@
     });
     FIELDS.checkin.addEventListener('change', function () {
       if (FIELDS.checkout.value && FIELDS.checkout.value < FIELDS.checkin.value) FIELDS.checkout.value = FIELDS.checkin.value;
-      FIELDS.checkout.min = FIELDS.checkin.value || iso;
+      FIELDS.checkout.min = FIELDS.checkin.value || todayIso();
       updatePrice();
     });
     FIELDS.checkout.addEventListener('change', updatePrice);
@@ -440,6 +528,7 @@
           if (rw && s.rentalStartTime && s.rentalEndTime) {
             rw.textContent = 'Rental day runs ' + window.Sthira.to12h(s.rentalStartTime) + ' – ' + window.Sthira.to12h(s.rentalEndTime) + '. Returning on a later date counts as another day.';
           }
+          renderAvailability(s.availableCount);
         }
         updatePrice();
       })

@@ -17,7 +17,8 @@ const SHEET_HEADERS = {
     'ActualReturn', 'LateHours', 'LateFee', 'DeductionTotal',
     'RefundCash', 'RefundUPI', 'RefundTotal',
     'OperatorReturned', 'ReturnNotes',
-    'Email'
+    'Email',
+    'CancelledAt', 'CancelledBy'
   ],
   Deductions: ['DeductionId', 'BookingId', 'Amount', 'Reason', 'AppliedBy', 'Timestamp'],
   Handovers:  ['HandoverId', 'Timestamp', 'AmountCash', 'HandedBy', 'ReceivedBy', 'Note', 'Status', 'RequestedBy', 'ApprovedBy', 'DecidedAt'],
@@ -64,7 +65,10 @@ const BC = {
   REFUND_TOTAL:        32,
   OPERATOR_RETURNED:   33,
   RETURN_NOTES:        34,
-  EMAIL:               35
+  EMAIL:               35,
+  // Appended (append-only, positional) for the Active-cancel refund flow.
+  CANCELLED_AT:        36,
+  CANCELLED_BY:        37
 };
 
 const VC = { VEHICLE_ID: 0, LABEL: 1, STATUS: 2, TYPE: 3, NOTES: 4, ADDED_ON: 5 };
@@ -118,6 +122,7 @@ function initializeSheets() {
     ];
     moneyCols.forEach(c => bk.getRange(2, c + 1, 998, 1).setNumberFormat('₹#,##0'));
     bk.getRange(2, BC.CREATED_AT + 1, 998, 1).setNumberFormat('dd MMM yyyy, HH:mm');
+    bk.getRange(2, BC.CANCELLED_AT + 1, 998, 1).setNumberFormat('dd MMM yyyy, HH:mm');
   } catch (e) {}
 
   // Seed default Settings rows
@@ -141,6 +146,79 @@ function initializeSheets() {
   }
 
   return { success: true, message: 'All sheets initialized.' };
+}
+
+// ─── Manual reset (editor only) ─────────────────────────────────────────────────
+// Run by hand from the Apps Script editor to wipe the app back to a clean first-run
+// state and rebuild a fresh data sheet — e.g. after the data sheet was deleted or
+// must be reset. It is deliberately NOT callable from the web UI.
+//
+// GUARDED: if the linked sheet still opens AND holds real data (any bookings or
+// operators), resetAndSetup() REFUSES and tells you to run YES_ERASE_EVERYTHING()
+// instead. When the linked sheet is already gone/unopenable, it proceeds directly.
+// PIN_SECRET is always kept so existing PIN hashes stay valid.
+function resetAndSetup() {
+  return _resetAndSetup(false);
+}
+
+// Same reset, but erases even when the linked sheet still holds live bookings /
+// operators. Use only when you truly mean to destroy the current data.
+function YES_ERASE_EVERYTHING() {
+  return _resetAndSetup(true);
+}
+
+function _resetAndSetup(force) {
+  const props = PropertiesService.getScriptProperties();
+  const oldId = props.getProperty('SPREADSHEET_ID');
+
+  // Refusal guard: only when the linked sheet still opens AND holds real data.
+  if (oldId && !force) {
+    let existing = null;
+    try { existing = SpreadsheetApp.openById(oldId); } catch (e) { existing = null; }
+    if (existing) {
+      const bookings  = _countDataRows(existing, 'Bookings');
+      const operators = _countDataRows(existing, 'Operators');
+      if (bookings > 0 || operators > 0) {
+        Logger.log('resetAndSetup REFUSED — the linked sheet still holds real data: '
+          + bookings + ' booking(s), ' + operators + ' operator(s).');
+        Logger.log('run YES_ERASE_EVERYTHING to confirm');
+        return;
+      }
+    }
+  }
+
+  // Trash the old spreadsheet best-effort so we don't orphan it in Drive.
+  if (oldId) {
+    try { DriveApp.getFileById(oldId).setTrashed(true); }
+    catch (e) { Logger.log('resetAndSetup: could not trash old sheet: ' + e.message); }
+  }
+
+  // Clear the install/migration guards so _ensureSetup rebuilds from scratch and every
+  // append-only migration re-runs on the fresh sheet. KEEP PIN_SECRET (PIN hashes).
+  ['SPREADSHEET_ID', 'SETUP_DONE', 'COLS_MIGRATED', 'MONEY_MIGRATED', 'CANCEL_MIGRATED']
+    .forEach(k => props.deleteProperty(k));
+  props.setProperty('DATA_VERSION', '0');
+
+  _ensureSetup(); // builds a new sheet + all tabs + headers + default settings (no schema duped here)
+
+  // The editor can't open tabs, so log tappable URLs for the phone.
+  let sheetUrl = '';
+  try { sheetUrl = _getSS().getUrl() || ''; } catch (e) {}
+  let execUrl = '';
+  try { execUrl = ScriptApp.getService().getUrl() || ''; } catch (e) {}
+  Logger.log('Reset complete. New data sheet: ' + sheetUrl);
+  Logger.log('Open the desk here: ' + execUrl);
+  return { success: true, sheetUrl: sheetUrl, execUrl: execUrl };
+}
+
+// Count non-header data rows in a tab (0 if the tab is missing). Used by the reset
+// refusal guard to decide whether the linked sheet still holds real data.
+function _countDataRows(ss, tabName) {
+  try {
+    const sh = ss.getSheetByName(tabName);
+    if (!sh) return 0;
+    return Math.max(0, sh.getLastRow() - 1);
+  } catch (e) { return 0; }
 }
 
 // ─── Vehicle status helper ─────────────────────────────────────────────────────
