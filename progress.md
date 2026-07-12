@@ -50,6 +50,6 @@ Codebase is stable. No backend `.gs` controllers were mutated, ensuring no schem
   * **Fleet View**: Injected a new `<b style="color:var(--txt-1);">[Count]</b> total` metric into the top analytics ribbon of `renderFleet()`.
   * **Yard View**: Appended `<span style="font-size:12px;font-weight:500;color:var(--muted-2);">(Total: [Count])</span>` directly into the `<h2>Fleet</h2>` header for quick context without cluttering the UI.
 
-## 9. Final Polish & Professional UX (Admin.html)
-* **Topbar De-sticky**: Removed `position: sticky; top: 0` from `.topbar` in `Admin.html` as the floating behavior obstructed scrolling UX.
+## 9. Final Polish & Professional UX
 * **Professional Login Branding**: Rewrote the login screen copy. Replaced the generic "calm desk" phrase with "Authorized Personnel Only / Sthira Fleet Management System" to convey strict professionalism.
+* **Guest Form Polish**: Fixed a scrolling obstruction in the Guest Rider Form (`RiderForm.html`) by converting the light/dark theme toggle from `position: fixed` to `position: absolute`. It now scrolls out of the way natively. Re-instated `position: sticky` on the Admin dashboard topbar.
