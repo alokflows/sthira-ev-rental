@@ -18,7 +18,8 @@ const SHEET_HEADERS = {
     'RefundCash', 'RefundUPI', 'RefundTotal',
     'OperatorReturned', 'ReturnNotes',
     'Email',
-    'CancelledAt', 'CancelledBy'
+    'CancelledAt', 'CancelledBy',
+    'YardDoneAt'
   ],
   Deductions: ['DeductionId', 'BookingId', 'Amount', 'Reason', 'AppliedBy', 'Timestamp'],
   Handovers:  ['HandoverId', 'Timestamp', 'AmountCash', 'HandedBy', 'ReceivedBy', 'Note', 'Status', 'RequestedBy', 'ApprovedBy', 'DecidedAt'],
@@ -68,7 +69,10 @@ const BC = {
   EMAIL:               35,
   // Appended (append-only, positional) for the Active-cancel refund flow.
   CANCELLED_AT:        36,
-  CANCELLED_BY:        37
+  CANCELLED_BY:        37,
+  // Appended (append-only, positional): stamped when the yard physically brings the
+  // scooter out for a newly-Active booking. Empty = still an open "bring out" task.
+  YARD_DONE_AT:        38
 };
 
 const VC = { VEHICLE_ID: 0, LABEL: 1, STATUS: 2, TYPE: 3, NOTES: 4, ADDED_ON: 5, LOCATION: 6 };
@@ -127,6 +131,7 @@ function initializeSheets() {
     moneyCols.forEach(c => bk.getRange(2, c + 1, 998, 1).setNumberFormat('₹#,##0'));
     bk.getRange(2, BC.CREATED_AT + 1, 998, 1).setNumberFormat('dd MMM yyyy, HH:mm');
     bk.getRange(2, BC.CANCELLED_AT + 1, 998, 1).setNumberFormat('dd MMM yyyy, HH:mm');
+    bk.getRange(2, BC.YARD_DONE_AT + 1, 998, 1).setNumberFormat('dd MMM yyyy, HH:mm');
   } catch (e) {}
 
   // Seed default Settings rows
@@ -199,7 +204,7 @@ function _resetAndSetup(force) {
 
   // Clear the install/migration guards so _ensureSetup rebuilds from scratch and every
   // append-only migration re-runs on the fresh sheet. KEEP PIN_SECRET (PIN hashes).
-  ['SPREADSHEET_ID', 'SETUP_DONE', 'COLS_MIGRATED', 'MONEY_MIGRATED', 'CANCEL_MIGRATED', 'VEH_COLS_MIGRATED']
+  ['SPREADSHEET_ID', 'SETUP_DONE', 'COLS_MIGRATED', 'MONEY_MIGRATED', 'CANCEL_MIGRATED', 'VEH_COLS_MIGRATED', 'YARD_COLS_MIGRATED']
     .forEach(k => props.deleteProperty(k));
   props.setProperty('DATA_VERSION', '0');
 
@@ -238,6 +243,39 @@ function _ensureVehicleColumns() {
     }
   } catch (e) {
     Logger.log('_ensureVehicleColumns failed: ' + e.message);
+  }
+}
+
+// Migration: append the YardDoneAt column (yard bring-out acknowledgement) to a
+// Bookings sheet made before it existed. Append-only, idempotent. Back-fills the
+// current timestamp into every EXISTING Active booking's YardDoneAt so the yard
+// task queue starts empty — otherwise every already-out rental would appear as a
+// brand-new "bring out" task the first time the Yard view loads.
+function _ensureYardColumns() {
+  try {
+    const sheet = _getSS().getSheetByName('Bookings');
+    if (!sheet || sheet.getLastColumn() === 0) return;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+    if (headers.indexOf('YardDoneAt') === -1) {
+      sheet.getRange(1, sheet.getLastColumn() + 1)
+        .setValue('YardDoneAt').setFontWeight('bold').setBackground('#2F5D50').setFontColor('#FFFFFF');
+      headers.push('YardDoneAt');
+    }
+    const yardCol = headers.indexOf('YardDoneAt') + 1;
+    const last = sheet.getLastRow();
+    if (last > 1 && yardCol > 0) {
+      const statusVals = sheet.getRange(2, BC.STATUS + 1, last - 1, 1).getValues();
+      const yardRng    = sheet.getRange(2, yardCol, last - 1, 1);
+      const yardVals   = yardRng.getValues();
+      let dirty = false;
+      const now = new Date();
+      for (let i = 0; i < yardVals.length; i++) {
+        if (String(statusVals[i][0]) === 'Active' && !yardVals[i][0]) { yardVals[i][0] = now; dirty = true; }
+      }
+      if (dirty) yardRng.setValues(yardVals);
+    }
+  } catch (e) {
+    Logger.log('_ensureYardColumns failed: ' + e.message);
   }
 }
 

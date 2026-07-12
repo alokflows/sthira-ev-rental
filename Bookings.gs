@@ -90,7 +90,8 @@ function _rowToBooking(row) {
     returnNotes:     String(row[BC.RETURN_NOTES] || ''),
     email:           String(row[BC.EMAIL] || ''),
     cancelledAt:     _formatIST(row[BC.CANCELLED_AT]),
-    cancelledBy:     String(row[BC.CANCELLED_BY] || '')
+    cancelledBy:     String(row[BC.CANCELLED_BY] || ''),
+    yardDoneAt:      _formatIST(row[BC.YARD_DONE_AT])
   };
 }
 
@@ -496,6 +497,28 @@ function swapBookingVehicle(bookingId, newVehicleId, oldStatus, token) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ─── Admin/Yard — acknowledge a scooter has been brought out ─────────────────
+// The desk confirms a booking (Active + a scooter allocated) — the yard must notice
+// and physically bring that scooter out to the guest. This just stamps WHEN the yard
+// did that, so the Yard view's task queue can show only what's still outstanding.
+// Idempotent by design: two staff tapping "handed over" on the same task at once both
+// succeed — the second is a harmless no-op (no lock: it's a single cell write with no
+// money/race-sensitive read-modify-write, unlike confirmBooking's vehicle allocation).
+function markYardDone(bookingId, token) {
+  requireAdmin(token);
+  const sheet = _getBookingsSheet();
+  const data  = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][BC.BOOKING_ID]) !== bookingId) continue;
+    if (String(data[i][BC.STATUS]) !== 'Active') throw new Error('This booking is not active.');
+    if (data[i][BC.YARD_DONE_AT]) return { success: true, already: true };
+    sheet.getRange(i + 1, BC.YARD_DONE_AT + 1).setValue(new Date());
+    _bumpDataVersion();
+    return { success: true };
+  }
+  throw new Error('Booking not found: ' + bookingId);
 }
 
 // Cancel a booking.

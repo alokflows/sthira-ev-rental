@@ -348,9 +348,9 @@ function addOperator(name, pin, role, token) {
   const clean = _cleanPin(pin);
   if (!String(name || '').trim()) throw new Error('Operator name is required.');
   if (clean.length < 6) throw new Error('Set a 6-digit PIN for this operator.');
-  // The client may mint only Operator or Supervisor — never an Admin/Manager (the
-  // first manager from the setup wizard is the sole full-power account).
-  const safeRole = (role === 'Supervisor') ? 'Supervisor' : 'Operator';
+  // The client may mint only Operator, Supervisor, or Yard — never an Admin/Manager
+  // (the first manager from the setup wizard is the sole full-power account).
+  const safeRole = (role === 'Supervisor' || role === 'Yard') ? role : 'Operator';
   // Cash/drawers are attributed by operator NAME, so two active people with the same
   // name would silently merge into one drawer. Reject a duplicate active name.
   const nm = String(name).trim();
@@ -364,11 +364,11 @@ function addOperator(name, pin, role, token) {
   return { success: true, operatorId: id };
 }
 
-// Manager changes an existing user between Operator and Supervisor only. Never touches
-// an Admin/Manager row (can't demote the manager) and never mints a second manager.
+// Manager changes an existing user between Operator, Supervisor, and Yard only. Never
+// touches an Admin/Manager row (can't demote the manager) and never mints a second manager.
 function setOperatorRole(operatorId, role, token) {
   _requireManager(token);
-  const safeRole = (role === 'Supervisor') ? 'Supervisor' : 'Operator';
+  const safeRole = (role === 'Supervisor' || role === 'Yard') ? role : 'Operator';
   const target = _getOperatorsData().find(o => o.operatorId === operatorId);
   if (!target) throw new Error('Operator not found.');
   if (target.role === 'Admin' || target.role === 'Manager') throw new Error('The manager\'s role cannot be changed.');
