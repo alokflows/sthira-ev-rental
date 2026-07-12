@@ -49,11 +49,11 @@
   function endMut(){ if(A.inflight>0) A.inflight--; }
   // Animate views only on real navigation / first paint — never on a silent background sync.
   function animCls(){ return A.silent ? '' : 'anim-fade'; }
-  // Session persistence: survives an accidental refresh (F5) but is wiped when the
-  // tab is closed — so a refresh keeps you signed in, closing the tab logs you out.
-  function saveSession(){ try{ sessionStorage.setItem('sthira_session', JSON.stringify({ token:A.token, operator:A.operator, role:A.role })); }catch(e){} }
-  function readSession(){ try{ return JSON.parse(sessionStorage.getItem('sthira_session')||'null'); }catch(e){ return null; } }
-  function clearSession(){ try{ sessionStorage.removeItem('sthira_session'); }catch(e){} }
+  // Session persistence: survives closing the tab/app, keeping the user logged in
+  // until they explicitly log out, making it feel like a native app.
+  function saveSession(){ try{ localStorage.setItem('sthira_session', JSON.stringify({ token:A.token, operator:A.operator, role:A.role })); }catch(e){} }
+  function readSession(){ try{ return JSON.parse(localStorage.getItem('sthira_session')||'null'); }catch(e){ return null; } }
+  function clearSession(){ try{ localStorage.removeItem('sthira_session'); }catch(e){} }
   function todayStr(){ return new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
 
   function call(fn, args){
@@ -256,7 +256,7 @@
   // gated regardless, same convention as isMgr()). Hides the money-adjacent nav so a
   // yard phone's chrome stays focused on the yard task.
   function applyRoleNav(){
-    var hideViews = (A.role==='Yard') ? ['money','reports','settings'] : [];
+    var hideViews = (A.role==='Yard') ? ['overview','bookings','fleet','money','reports','settings'] : [];
     Array.prototype.forEach.call(document.querySelectorAll('.nav-btn,.bn-btn'), function(b){
       b.classList.toggle('hidden', hideViews.indexOf(b.getAttribute('data-view'))>=0);
     });
@@ -646,6 +646,8 @@
       btns+='<button class="veh-ib" data-action="yard-location" data-id="'+esc(v.vehicleId)+'" title="Set location" style="width:44px;height:44px;border-radius:12px;">'+IB_PIN+'</button>';
       btns+='<button class="veh-ib" data-action="yard-toggle" data-id="'+esc(v.vehicleId)+'" data-status="'+nextCharge+'" title="'+(v.status==='Charging'?'Charged — mark available':'Plug in to charge')+'" style="width:44px;height:44px;border-radius:12px;">'+(v.status==='Charging'?IB_C:IB_L)+'</button>';
       btns+='<button class="veh-ib" data-action="yard-toggle" data-id="'+esc(v.vehicleId)+'" data-status="'+nextMaint+'" title="'+(v.status==='Maintenance'?'Mark available':'Send to maintenance')+'" style="width:44px;height:44px;border-radius:12px;">'+(v.status==='Maintenance'?IB_C:IB_W)+'</button>';
+    } else if(v.activeBooking) {
+      btns+='<button class="btn" data-action="yard-out-details" data-id="'+esc(v.activeBooking.bookingId)+'" style="flex:1;background:var(--pine-tint);color:var(--pine);border:none;font-weight:600;border-radius:12px;padding:8px;font-size:13.5px;">Guest details</button>';
     }
     return '<div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px;">'
       +'<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;"><span style="font-family:var(--mono);font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.label)+'</span><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';flex:none;">'+sm.label+'</span></div>'
@@ -1569,6 +1571,17 @@
 
   // ════════ BOOKING DETAILS (overlay — instant, from cache) ════════
   function detailRow(label, value){ if(value===''||value==null) return ''; return '<div style="display:flex;justify-content:space-between;gap:18px;padding:9px 0;border-top:1px solid var(--line);"><span style="color:var(--muted-2);font-size:13px;">'+esc(label)+'</span><span style="font-weight:600;font-size:13.5px;text-align:right;max-width:62%;word-break:break-word;">'+esc(value)+'</span></div>'; }
+  function detailRowRaw(label, rawHTML){ if(!rawHTML) return ''; return '<div style="display:flex;justify-content:space-between;gap:18px;padding:9px 0;border-top:1px solid var(--line);"><span style="color:var(--muted-2);font-size:13px;">'+esc(label)+'</span><span style="font-weight:600;font-size:13.5px;text-align:right;">'+rawHTML+'</span></div>'; }
+
+  function openYardBookingDetails(bookingId){
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(!b){ flash('Booking not found.', true); return; }
+    var phoneHTML = '<a href="tel:'+esc(b.mobile)+'" style="color:var(--pine);text-decoration:none;display:inline-flex;align-items:center;gap:6px;">'+esc(b.mobile)+'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></a>';
+    var body='<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;"><div class="av" style="width:46px;height:46px;font-size:16px;">'+esc(initials(b.riderName))+'</div><div style="flex:1;min-width:0;"><div style="font-weight:700;font-size:17px;">'+esc(b.riderName)+'</div><div style="font-size:12.5px;color:var(--muted-2);font-family:var(--mono);">'+esc(b.bookingId)+'</div></div></div>'
+      +detailSection('Guest',[ detailRow('Cottage / stay', b.cottageName), detailRowRaw('Mobile', phoneHTML) ])
+      +detailSection('Rental',[ detailRow('Scooter', b.vehicleLabel), detailRow('Check-in', b.checkIn), detailRow('Return by', b.checkOut), detailRow('Duration', b.days?b.days+' day(s)':''), detailRow('Booked on', b.createdAt) ]);
+    openModal('Out on rent', 'Guest contact information', body, '<button class="btn-ghost-lg" data-action="modal-close" style="width:100%;">Close</button>');
+  }
   function detailSection(title, rows){ var inner=rows.join(''); if(!inner) return ''; return '<div style="margin-bottom:16px;"><div style="font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);">'+esc(title)+'</div>'+inner+'</div>'; }
   function openBookingDetails(bookingId){
     var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
@@ -1817,6 +1830,7 @@
       case 'yard-loc-submit': withBtn(t, submitYardLocation(null)); break;
       case 'yard-chip': A.yardFilter=(A.yardFilter===t.getAttribute('data-status'))?'':t.getAttribute('data-status'); renderYard(); break;
       case 'yard-sort': A.yardSortAlpha=!A.yardSortAlpha; renderYard(); break;
+      case 'yard-out-details': openYardBookingDetails(id); break;
       case 'yard-enable-alerts': yardEnableAlerts(); break;
       case 'yard-dismiss-banner': A.yardBannerDismissed=true; renderYard(); break;
       case 'ho-verify': withBtn(t, hoDecide(id, true)); break;
