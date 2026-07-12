@@ -608,7 +608,8 @@
     try{ if(navigator.vibrate) navigator.vibrate([200,100,200]); }catch(e){}
     try{
       if(('Notification' in window) && Notification.permission==='granted'){
-        new Notification('Bring out '+(task.vehicleLabel||'a scooter'), { body:(task.riderName||'Guest')+' · '+task.bookingId });
+        var n = new Notification('Bring out '+(task.vehicleLabel||'a scooter'), { body:(task.riderName||'Guest')+' · '+task.mobile });
+        n.onclick = function(){ window.focus(); if(A.view!=='yard') gotoView('yard'); };
       }
     }catch(e){}
     flash('Bring out '+(task.vehicleLabel||'a scooter')+' for '+(task.riderName||'a guest')+'.');
@@ -623,12 +624,18 @@
     }
   }
   function yardTaskCard(b){
-    var first=(b.riderName||'').split(' ')[0];
+    var v=(C.vehicles||[]).filter(function(x){return x.vehicleId===b.vehicleId;})[0];
+    var locText = v && v.location ? esc(v.location) : 'No location set';
+    var locBadge = '<span style="display:inline-block;padding:2px 6px;border-radius:4px;background:var(--card-alt);border:1px solid var(--line);font-size:11px;font-family:var(--mono);color:var(--muted);">'+locText+'</span>';
+    
     return '<div style="background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px;">'
       +'<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">'
       +'<span style="font-family:var(--mono);font-size:23px;font-weight:700;letter-spacing:.4px;">'+esc(b.vehicleLabel||'—')+'</span>'
-      +'<span style="font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap;">'+esc(b.bookingId)+'</span></div>'
-      +'<div style="font-size:14.5px;color:var(--txt-2);margin-top:4px;">'+esc(first)+(b.cottageName?' · '+esc(b.cottageName):'')+'</div>'
+      +locBadge+'</div>'
+      +'<div style="font-size:14.5px;color:var(--txt-1);margin-top:8px;font-weight:600;">'+esc(b.riderName)+'</div>'
+      +'<div style="font-size:13px;color:var(--txt-2);margin-top:4px;display:flex;align-items:center;gap:6px;">'
+      +'<a href="tel:'+esc(b.mobile)+'" style="color:var(--pine);text-decoration:none;font-weight:600;">📞 '+esc(b.mobile)+'</a>'
+      +(b.cottageName?' <span style="color:var(--line-3);">|</span> '+esc(b.cottageName):'')+'</div>'
       +'<button class="btn-lg" data-action="yard-done" data-id="'+esc(b.bookingId)+'" style="width:100%;margin-top:14px;min-height:48px;">Scooter handed over</button>'
       +'</div>';
   }
