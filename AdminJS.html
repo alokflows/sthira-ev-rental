@@ -645,7 +645,7 @@
     return '<div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px;">'
       +'<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;"><span style="font-family:var(--mono);font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.label)+'</span><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';flex:none;">'+sm.label+'</span></div>'
       +'<div style="font-size:12px;color:var(--muted-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+locLine+'</div>'
-      +(btns?'<div style="display:flex;gap:6px;">'+btns+'</div>':'')
+      +(btns?'<div style="display:flex;gap:6px;justify-content:center;">'+btns+'</div>':'')
       +'</div>';
   }
   function renderYard(){
@@ -684,7 +684,7 @@
       +'<div class="panel"><h2 style="margin-bottom:12px;">Bring out</h2>'+taskHtml+'</div>'
       +'<div style="display:flex;flex-direction:column;gap:18px;">'
       +'<div class="panel"><h2 style="margin-bottom:12px;">Fleet</h2><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">'+chipRow+'</div>'
-      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;">'+gridHtml+'</div></div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:10px;">'+gridHtml+'</div></div>'
       +'<div class="panel"><h2 style="margin-bottom:6px;">Due back today</h2>'+dueHtml+'</div>'
       +'</div></div></div>';
   }
