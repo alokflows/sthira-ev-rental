@@ -676,7 +676,18 @@
       return '<button class="chip'+(A.yardFilter===cd[0]?' on':'')+'" data-action="yard-chip" data-status="'+cd[0]+'">'+cd[0]+'<span class="cct">'+cd[1]+'</span></button>';
     }).join('');
 
-    var gridVehicles = A.yardFilter ? vs.filter(function(v){ return v.status===A.yardFilter; }) : vs;
+    var gridVehicles = A.yardFilter ? vs.filter(function(v){ return v.status===A.yardFilter; }) : vs.slice();
+    var statWeight = {'Available':1, 'Charging':2, 'Maintenance':3, 'Out':4};
+    gridVehicles.sort(function(a,b){
+      if(!A.yardSortAlpha && a.status !== b.status){
+        var wa = statWeight[a.status] || 99;
+        var wb = statWeight[b.status] || 99;
+        if(wa !== wb) return wa - wb;
+      }
+      var la = String(a.label||'').toLowerCase();
+      var lb = String(b.label||'').toLowerCase();
+      return la < lb ? -1 : (la > lb ? 1 : 0);
+    });
     var gridHtml = gridVehicles.length ? gridVehicles.map(yardVehicleCard).join('') : '<div class="empty" style="grid-column:1/-1;">No scooters here.</div>';
 
     var due=bkDueToday();
@@ -684,11 +695,14 @@
       return '<div style="display:flex;align-items:center;gap:10px;padding:10px 2px;border-top:1px solid var(--hair);"><span style="font-family:var(--mono);font-weight:600;font-size:13.5px;flex:none;">'+esc(b.vehicleLabel||'—')+'</span><span style="font-size:13px;color:var(--txt-2);">'+esc((b.riderName||'').split(' ')[0])+'</span></div>';
     }).join('') : '<div class="empty" style="padding:14px 0;">Nothing due back today.</div>';
 
+    var sortIcon = A.yardSortAlpha ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>' : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>';
+    var sortBtn = '<button class="veh-ib" data-action="yard-sort" title="Toggle sorting (A-Z vs Grouped)" style="background:transparent;border-color:var(--line-3);">'+sortIcon+'</button>';
+
     $('view-yard').innerHTML='<div class="'+animCls()+'">'+banner
       +'<div class="split">'
       +'<div class="panel"><h2 style="margin-bottom:12px;">Bring out</h2>'+taskHtml+'</div>'
       +'<div style="display:flex;flex-direction:column;gap:18px;">'
-      +'<div class="panel"><h2 style="margin-bottom:12px;">Fleet</h2><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">'+chipRow+'</div>'
+      +'<div class="panel"><h2 style="margin-bottom:12px;">Fleet</h2><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center;">'+chipRow+'<div style="flex:1;"></div>'+sortBtn+'</div>'
       +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:10px;">'+gridHtml+'</div></div>'
       +'<div class="panel"><h2 style="margin-bottom:6px;">Due back today</h2>'+dueHtml+'</div>'
       +'</div></div></div>';
@@ -1802,6 +1816,7 @@
       case 'yard-loc-pick': withBtn(t, submitYardLocation(t.getAttribute('data-loc'))); break;
       case 'yard-loc-submit': withBtn(t, submitYardLocation(null)); break;
       case 'yard-chip': A.yardFilter=(A.yardFilter===t.getAttribute('data-status'))?'':t.getAttribute('data-status'); renderYard(); break;
+      case 'yard-sort': A.yardSortAlpha=!A.yardSortAlpha; renderYard(); break;
       case 'yard-enable-alerts': yardEnableAlerts(); break;
       case 'yard-dismiss-banner': A.yardBannerDismissed=true; renderYard(); break;
       case 'ho-verify': withBtn(t, hoDecide(id, true)); break;
