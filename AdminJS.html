@@ -565,7 +565,7 @@
       return '<div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:11px 13px;overflow:hidden;display:flex;flex-direction:column;gap:6px;">'
         +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><span style="font-family:var(--mono);font-weight:500;font-size:14.5px;letter-spacing:.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.label)+'</span><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';flex:none;">'+sm.label+'</span></div>'
         +'<div style="font-size:11.5px;color:var(--muted-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.type||'Rental')+(v.vehicleId?' · '+esc(v.vehicleId):'')+'</div>'
-        +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:24px;"><span style="font-size:11.5px;color:var(--muted-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;">'+note+'</span>'+(btns?'<span style="display:flex;gap:5px;flex:none;">'+btns+'</span>':'')+'</div>'
+        +'<div class="veh-actrow" style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:24px;"><span style="font-size:11.5px;color:var(--muted-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;">'+note+'</span>'+(btns?'<span style="display:flex;gap:5px;flex:none;">'+btns+'</span>':'')+'</div>'
         +'</div>';
     }).join('');
     $('view-fleet').innerHTML='<div class="'+animCls()+'"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px;">'
@@ -781,7 +781,7 @@
         { lbl:'Given to manager',    val:inr(om.givenToManager||0), sub:'handed over & verified' }
       ];
     }
-    var cardHtml=cards.map(function(c){ var canDrill=(canMoney&&c.drill); var st=(c.accent?'background:var(--pine);color:#fff;border-color:var(--pine);':'')+(canDrill?'cursor:pointer;':''); return '<div class="stat"'+(canDrill?' data-action="money-drill" data-drill="'+c.drill+'"':'')+(st?' style="'+st+'"':'')+'><div class="lbl" style="'+(c.accent?'color:rgba(255,255,255,.82);':'')+'">'+c.lbl+(canDrill?' <span style="color:var(--faint);font-weight:400;">›</span>':'')+'</div><div style="font-family:var(--serif);font-size:22px;font-weight:500;margin-top:6px;'+(c.accent?'color:#fff;':'')+'">'+c.val+'</div><div style="font-size:11px;margin-top:4px;'+(c.accent?'color:rgba(255,255,255,.85);':'color:var(--muted-2);')+'">'+c.sub+'</div></div>'; }).join('');
+    var cardHtml=cards.map(function(c){ var canDrill=(canMoney&&c.drill); var st=(c.accent?'background:var(--pine);color:#fff;border-color:var(--pine);':'')+(canDrill?'cursor:pointer;':''); return '<div class="stat"'+(canDrill?' data-action="money-drill" data-drill="'+c.drill+'"':'')+(st?' style="'+st+'"':'')+'><div class="lbl" style="'+(c.accent?'color:rgba(255,255,255,.82);':'')+'">'+c.lbl+(canDrill?' <span style="color:var(--faint);font-weight:400;">›</span>':'')+'</div><div class="val" style="font-family:var(--serif);font-size:22px;font-weight:500;margin-top:6px;'+(c.accent?'color:#fff;':'')+'">'+c.val+'</div><div style="font-size:11px;margin-top:4px;'+(c.accent?'color:rgba(255,255,255,.85);':'color:var(--muted-2);')+'">'+c.sub+'</div></div>'; }).join('');
 
     // Drawers
     var drawerHtml;
@@ -862,7 +862,7 @@
     var maxRev=Math.max(1, Math.max.apply(null, series.map(function(d){return d.revenue;}).concat([0])));
     var bars=series.length ? series.map(function(d){ var h=Math.round(d.revenue/maxRev*100); return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px;height:100%;justify-content:flex-end;min-width:28px;"><div style="font-size:11px;color:var(--faint);font-family:var(--mono);">'+(d.revenue?('₹'+(d.revenue/1000).toFixed(1)+'k'):'')+'</div><div style="width:100%;max-width:42px;height:'+Math.max(2,h)+'%;background:var(--pine);border-radius:8px 8px 0 0;"></div><div style="font-size:11.5px;color:var(--muted-2);white-space:nowrap;">'+esc(d.date)+'</div></div>'; }).join('') : '<div class="empty" style="margin:auto;">No activity in this period yet.</div>';
     var stats=[{ lbl:'Revenue (rent)', val:inr(a.totalRevenue) },{ lbl:'Bookings', val:String(a.totalBookings) },{ lbl:'Late fees', val:inr(a.totalLateFees) },{ lbl:'Deductions', val:inr(a.totalDeductions) }];
-    var statHtml=stats.map(function(s){ return '<div class="stat"><div class="lbl">'+s.lbl+'</div><div style="font-family:var(--serif);font-size:30px;font-weight:500;margin-top:10px;">'+s.val+'</div></div>'; }).join('');
+    var statHtml=stats.map(function(s){ return '<div class="stat"><div class="lbl">'+s.lbl+'</div><div class="val" style="font-family:var(--serif);font-size:30px;font-weight:500;margin-top:10px;">'+s.val+'</div></div>'; }).join('');
     var s=C.settings||{};
     var repCard = can('supViewMoney') ? '<div class="panel" style="margin-top:18px;"><h2 style="margin-bottom:4px;">Email &amp; export</h2>'
       +'<p style="margin:0 0 14px;font-size:13.5px;color:var(--muted-2);">Send or download this report. <b>Detailed</b> adds every booking + ledger transaction; <b>summary</b> is the totals only.</p>'

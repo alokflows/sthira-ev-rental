@@ -86,6 +86,8 @@
   .field{width:100%;padding:12px 14px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);
          font-size:14.5px;color:var(--ink);transition:border-color .15s;}
   .field::placeholder{color:#B6AE9D;}
+  /* iOS Safari auto-zooms on focus into any input under 16px — bump it back up on phones only. */
+  @media(max-width:640px){ .field{font-size:16px;} }
 
   /* ── Accept toggle (tap-to-accept term cards) ── */
   .toggle{display:flex;align-items:center;gap:11px;width:100%;justify-content:flex-start;

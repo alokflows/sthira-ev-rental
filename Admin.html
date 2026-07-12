@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Sthira — Desk</title>
   <script>(function(){try{if(localStorage.getItem('sthira_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
   <?!= include('Styles'); ?>
@@ -68,13 +68,30 @@
     .veh-ib:hover{background:var(--surface-2);color:var(--ink);}
     .veh-ib.danger{color:var(--terra);border-color:var(--terra-tint);}
     .veh-ib.danger:hover{background:var(--terra-tint);}
+    /* Fleet card icon row (4 buttons after the charging toggle) on phones: bump the tap
+       target to 40px+ and let the row wrap under the note text rather than shrink the
+       buttons, if a narrow grid column ever makes it tight. Desktop stays dense (34px). */
+    @media(max-width:860px){
+      .veh-ib{width:40px;height:40px;}
+      .veh-actrow{flex-wrap:wrap;row-gap:6px;}
+    }
 
     /* nav-pill (top-bar primary) */
     .btn-sm{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border-radius:13px;border:none;background:var(--pine);color:#fff;font-weight:600;font-size:14px;cursor:pointer;box-shadow:0 4px 14px rgba(47,93,80,.2);white-space:nowrap;}
+    /* Topbar "New booking" pill would clip its label at 360px — collapse to an icon-only
+       tap target (still ≥42px) and keep the "+" recognizable. */
+    @media(max-width:480px){#newBookingBtn span{display:none;}#newBookingBtn{padding:12px;gap:0;}}
 
     /* stat / cards */
     .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;}
-    @media(max-width:860px){.stat-grid{grid-template-columns:repeat(2,1fr);gap:12px;}}
+    @media(max-width:860px){
+      .stat-grid{grid-template-columns:repeat(2,1fr);gap:12px;}
+      /* Grid items don't shrink below their text's intrinsic width by default — a 6-digit
+         ₹ figure at 34px serif can force the track wider than the cell and overflow the
+         page. Let the cell shrink and the number wrap instead. */
+      .stat{min-width:0;}
+      .stat .val{overflow-wrap:anywhere;word-break:break-word;}
+    }
     .stat{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;}
     .stat .lbl{font-size:12.5px;letter-spacing:.04em;color:var(--muted-2);font-weight:600;text-transform:uppercase;}
     .stat .val{font-family:var(--serif);font-size:34px;font-weight:500;line-height:1;}
@@ -189,7 +206,14 @@
     .bottomnav{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--card);border-top:1px solid var(--line-3);display:none;padding:8px 6px calc(8px + env(safe-area-inset-bottom));box-shadow:0 -4px 24px rgba(60,50,30,.06);}
     @media(max-width:860px){.bottomnav{display:flex;}.sidebar{display:none;}}
     .bn-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:4px 2px;font-size:10.5px;font-weight:600;color:var(--faint);}
+    .bn-btn span{white-space:nowrap;}
     .bn-btn.on{color:var(--pine);}
+    /* 6 items at 360px: tighten so 8-char labels ("Bookings", "Settings") never wrap. */
+    @media(max-width:400px){
+      .bottomnav{padding:6px 2px calc(6px + env(safe-area-inset-bottom));}
+      .bn-btn{font-size:10px;padding:4px 0;gap:2px;}
+      .bn-btn svg{width:19px;height:19px;}
+    }
     .empty{padding:42px 0;text-align:center;color:var(--faint);font-size:14.5px;}
   </style>
 </head>

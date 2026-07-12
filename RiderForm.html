@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Sthira — Rental Agreement</title>
   <!-- Installable as a PWA on the desk tablet: open ?mode=rider in Chrome → Add to Home screen -->
   <link rel="manifest" href="?mode=manifest">
@@ -55,6 +55,12 @@
     [data-theme="dark"] .row-zone{border-color:var(--line);}
     [data-theme="dark"] .how .step{background:var(--card);}
     @media(max-width:560px){.hero h1{font-size:30px;}.grid-2{grid-template-columns:1fr;}}
+    /* Sticky footer at 360-414px: "Accept & send to desk" + icon doesn't fit beside the
+       progress bar in one row — stack it full-width instead of a partial-width orphan. */
+    @media(max-width:480px){
+      .footer-inner{gap:10px;}
+      .footer-inner .btn{flex:1 1 100%;justify-content:center;}
+    }
   </style>
 </head>
 <body>
