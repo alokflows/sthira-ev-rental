@@ -37,7 +37,7 @@ This document serves as a strict technical manifest of recent architecture modif
 Codebase is stable. No backend `.gs` controllers were mutated, ensuring no schema regressions. Client-side state logic remains isolated in `AdminJS.html`.
 
 ## 7. Handover Workflow Upgrades (AdminJS.html)
-* **Push Notifications**: Upgraded the `Notification` payload in `yardNotify()`. It now triggers a clean "New Booking: Bring out EV-01" style alert, explicitly hiding un-actionable guest details from the push body to keep the focus purely on the scooter task.
+* **Push Notifications**: Upgraded the `Notification` payload in `yardNotify()`. It now triggers a clean "New Booking: Bring out [Scooter Number]" style alert, explicitly hiding un-actionable guest details from the push body to keep the focus purely on the scooter task.
 * **Notification Interaction**: Bound `n.onclick` to force `window.focus()` and dynamically invoke `gotoView('yard')` so tapping the OS notification instantly brings the Yard worker to the correct screen where they can then see the guest details.
 * **Yard Task Cards (`yardTaskCard`)**: Rebuilt the "Bring out" task UI.
   * Resolved the scooter location from `C.vehicles` and embedded it as a native visual badge at the top right of the card.
