@@ -256,15 +256,16 @@
   // gated regardless, same convention as isMgr()). Hides the money-adjacent nav so a
   // yard phone's chrome stays focused on the yard task.
   function applyRoleNav(){
-    var hideViews = (A.role==='Yard') ? ['overview','bookings','fleet','money','reports','settings'] : [];
+    var isYard = (A.role==='Yard');
+    var hideViews = isYard ? ['overview','bookings','fleet','money','reports','settings'] : [];
     Array.prototype.forEach.call(document.querySelectorAll('.nav-btn,.bn-btn'), function(b){
       b.classList.toggle('hidden', hideViews.indexOf(b.getAttribute('data-view'))>=0);
     });
-    if(A.role==='Yard') {
-      var nbb=$('newBookingBtn'); if(nbb) nbb.style.display='none';
-      var ab=$('alertsBtn'); if(ab) ab.style.display='none';
-      var bnav=document.querySelector('.bottom-nav'); if(bnav) bnav.style.display='none';
-    }
+    var disp = isYard ? 'none' : '';
+    var nbb=$('newBookingBtn'); if(nbb) nbb.style.display=disp;
+    var ab=$('alertsBtn'); if(ab) ab.style.display=disp;
+    var bnav=document.querySelector('.bottom-nav'); if(bnav) bnav.style.display=disp;
+    var sc=$('sideCollapse'); if(sc) sc.style.display=disp;
   }
   // ── Light / dark theme ──
   var MOON_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
@@ -574,7 +575,7 @@
         +'</div>';
     }).join('');
     $('view-fleet').innerHTML='<div class="'+animCls()+'"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px;">'
-      +'<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13.5px;color:var(--muted);"><div><b style="color:var(--pine-soft);">'+avail+'</b> available</div><div><b style="color:#B07A2E;">'+out+'</b> out</div><div><b style="color:var(--gold-deep);">'+charge+'</b> charging</div><div><b style="color:#9A8F7C;">'+maint+'</b> in maintenance</div></div>'
+      +'<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13.5px;color:var(--muted);"><div><b style="color:var(--txt-1);">'+vs.length+'</b> total</div><div><b style="color:var(--pine-soft);">'+avail+'</b> available</div><div><b style="color:#B07A2E;">'+out+'</b> out</div><div><b style="color:var(--gold-deep);">'+charge+'</b> charging</div><div><b style="color:#9A8F7C;">'+maint+'</b> in maintenance</div></div>'
       +'<button class="btn" data-action="add-vehicle" style="border:1px solid var(--line-2);background:var(--card);color:var(--txt-2);font-weight:600;font-size:13.5px;padding:10px 16px;border-radius:12px;display:flex;align-items:center;gap:7px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add vehicle</button></div>'
       +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:11px;">'+(cards||'<div class="empty" style="grid-column:1/-1;">No scooters yet. Add your first vehicle.</div>')+'</div></div>';
   }
@@ -711,7 +712,7 @@
       +'<div class="split">'
       +'<div class="panel"><h2 style="margin-bottom:12px;">Bring out</h2>'+taskHtml+'</div>'
       +'<div style="display:flex;flex-direction:column;gap:18px;">'
-      +'<div class="panel"><h2 style="margin-bottom:12px;">Fleet</h2><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center;">'+chipRow+'<div style="flex:1;"></div>'+sortBtn+'</div>'
+      +'<div class="panel"><h2 style="margin-bottom:12px;display:flex;align-items:center;gap:8px;">Fleet <span style="font-size:12px;font-weight:500;color:var(--muted-2);">(Total: '+vs.length+')</span></h2><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center;">'+chipRow+'<div style="flex:1;"></div>'+sortBtn+'</div>'
       +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:10px;">'+gridHtml+'</div></div>'
       +'<div class="panel"><h2 style="margin-bottom:6px;">Due back today</h2>'+dueHtml+'</div>'
       +'</div></div></div>';

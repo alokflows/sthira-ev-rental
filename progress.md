@@ -43,3 +43,9 @@ Codebase is stable. No backend `.gs` controllers were mutated, ensuring no schem
   * Resolved the scooter location from `C.vehicles` and embedded it as a native visual badge at the top right of the card.
   * Replaced the abbreviated first name with the full `riderName`.
   * Injected a direct, actionable `tel:` link with the guest's mobile number for instantaneous calling right from the task card.
+
+## 8. Nav Bug & Fleet Analytics (AdminJS.html)
+* **Navbar Reset Bug**: Fixed a bug in `applyRoleNav()` where logging out of a Yard account and logging into an Admin account failed to un-hide the `display: none` elements. The DOM now explicitly restores `display: ''` for Admins.
+* **Total Vehicles Count**: 
+  * **Fleet View**: Injected a new `<b style="color:var(--txt-1);">[Count]</b> total` metric into the top analytics ribbon of `renderFleet()`.
+  * **Yard View**: Appended `<span style="font-size:12px;font-weight:500;color:var(--muted-2);">(Total: [Count])</span>` directly into the `<h2>Fleet</h2>` header for quick context without cluttering the UI.
