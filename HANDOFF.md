@@ -1,49 +1,27 @@
-# HANDOFF — state after the bug-fix batch (money fixes, reset function, guest polish)
+# Handoff for Next Agent (Sthira EV Rental)
 
-> **For the agent starting fresh:** Read **`AGENTS.md` in full first** — it is the operating contract.
-> This is a **LIVE cash desk at a real ashram**. Owner: alokflows@gmail.com, non-technical, prefers short
-> plain-language updates, often on phone.
->
-> Updated 2026-07-10 (evening) by the coordinating session after SHIPPING the whole batch.
+**CRITICAL RULES: BE SURGICAL, DO NOT MESS UP, BE PERFECT.** 
+Do not assume things. Do not break existing flows. Read the context and the codebase carefully before making any edits.
+Check `progress.md` to see the full history of what has been accomplished so far.
 
-## Current state — batch SHIPPED ✅
+## 1. Click-to-Call in Booking Details
+* **The Goal**: In all modal views that display booking details (specifically `openBookingDetails` and anywhere else mobile numbers are displayed), the mobile number must be a clickable button.
+* **The Implementation**: When the admin clicks the mobile number, it should instantly open the phone's native dialer. Use `href="tel:..."`. Make it look like a clean, clickable button/link (perhaps similar to how it was done in `openYardBookingDetails`).
 
-- All five pipeline steps completed and deployed on 2026-07-10:
-  1. **Money fixes** — all 9 audited bugs fixed (cancel-with-refund for Active bookings with per-channel
-     caps + reason + server-resolved actor; today's cash keyed to ledger timestamps; late fee uses `*_SNAP`
-     snapshots; `fullExtraDay` charges actual days late; backdated split validation; getLedger opening-cash
-     de-dupe; income capped to withheld; ₹0 late-fee hint; live return preview).
-     New: `CancelledAt`/`CancelledBy` columns (BC 36/37, appended) + `CANCEL_MIGRATED` guard;
-     `allowOperatorCancelActive` setting (default OFF, manager-only).
-  2. **`resetAndSetup()` / `YES_ERASE_EVERYTHING()`** in Setup.gs (guarded reset; keeps `PIN_SECRET`);
-     `_getSS()` recovery now clears migration guards and rebuilds via `_ensureSetup()` when the sheet is
-     gone (`_setupBuilding` reentrancy guard; zero cost on hot path). `SPREADSHEET_ID` added to AGENTS §6.
-  3. **Guest polish** — boot pre-fills today's dates + instant price; success-screen WhatsApp share
-     (`wa.me/?text=`, guest's own) + copy button; honest email copy; "X scooters free" banner via new
-     public `getPublicAvailableCount()` (count only, folded into `getPublicSettings`).
-  4. **Cross-verification** — independent Opus review: SAFE TO SHIP, zero correctness bugs; ponytail pass:
-     lean, nothing to cut. Node harness: **124/124 assertions pass** (was 83; harness lives at the old
-     scratchpad path in git history — rebuild from pure functions if gone).
-  5. **Ship** — live-vs-repo diff verified identical to HEAD before push; `clasp push --force`;
-     redeployed **@48** on `AKfycbymG-qx4J8R74GjlN_NZ5q1ukhMgJwFZM2L-d86NRWDlFicdfhV214QNtAShfS63KRd`;
-     admin=200 rider=200; committed + pushed to `alokflows/sthira-ev-rental` main.
+## 2. Restore Total Vehicle Count Subtitle
+* **The Bug**: During the recent Fleet UI redesign where the triage chips were added, the "Total Vehicles" metric was accidentally removed/lost from the Fleet view. 
+* **The Fix**: The user specifically wants the total vehicle number placed right under the main "Fleet" heading on the page, acting as a clean subtitle.
+* **Styling Rules**: Do **not** use the word "Total", and do **not** use brackets `( )`. Just cleanly display the number in the same size/font aesthetic beneath the title, so they immediately have context of the total fleet size.
 
-## Owner's next step (pending)
+## 3. Fleet Action Buttons Alignment
+* **The Bug**: The newly added action buttons on the Fleet cards (Location, Charge) are currently left-aligned (`justify-content:flex-start`).
+* **The Fix**: The user wants them perfectly centered in the middle of the card so that they match the exact uniformity and layout style of the Yard cards. Update the `btns` wrapper div in `renderFleet` to use `justify-content:center;`.
 
-- The Google Sheet is still deleted. Owner must open the Apps Script editor (sthira.ev@gmail.com), run
-  **`resetAndSetup()`** once (Run → Execution log → tap the logged URL), then do the Setup Wizard.
-- After real data exists and any money activity: run **`runSelfAudit`** once. Note: historical
-  Active-cancels from the old buggy flow (if old data is ever restored from Drive Trash) will now correctly
-  count in accounting — cash totals may look higher; that's the fix, not new money.
+## 4. Mobile Bottom Nav "Fleet" Icon Bug
+* **The Bug**: On Android mobile views, the Fleet logo in the bottom navigation bar (`<nav class="bottomnav">` in `Admin.html`) looks "chopped off" or slightly off-center/malformed.
+* **The Fix**: Inspect the SVG used for the Fleet button (the one with two wheels and a line `path d="M8 17.5h8"`). Fix the `viewBox`, scaling, or replace the SVG entirely with a robust, centered, aesthetic icon that renders perfectly on mobile without getting clipped.
 
-## Known follow-ups (non-blocking)
-
-- **LOW/perf:** `getTodayAccounting` reads the Ledger per bootstrap; `ledDataIn` param exists to thread a
-  single ledger read from `getBootstrap` later.
-- Not-fixing (by design): cross-operator refund drawer attribution; `_createOperator` id quirk; default
-  late fee stays ₹0.
-
-## Still deferred from the PREVIOUS batch (owner decisions pending — do not implement uninvited)
-
-- Server-enforced booking visibility for `supViewAllBookings` (options A/B in git history of this file).
-- Instant session revocation on remove/demote (session-epoch approach recommended there).
+## 5. General Instructions
+* Review `AdminJS.html` and `Admin.html` where these UI components live. 
+* Test your changes mentally to ensure they do not break the new Expandable Modal pattern for Fleet cards. 
+* Be perfect. Keep the codebase professional.
