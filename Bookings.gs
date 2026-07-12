@@ -107,11 +107,11 @@ function createPendingBooking(data) {
 
   // Check-in (guest may pick it; else today IST). Check-out = the date they'll return.
   let checkInIST = Utilities.formatDate(now, 'Asia/Kolkata', 'yyyy-MM-dd');
-  if (data.checkIn && /^\d{4}-\d{2}-\d{2}$/.test(String(data.checkIn).trim())) {
+  if (data.checkIn && _isRealYmd(data.checkIn)) {
     checkInIST = String(data.checkIn).trim();
   }
   let checkOutIST = checkInIST;
-  if (data.checkOut && /^\d{4}-\d{2}-\d{2}$/.test(String(data.checkOut).trim())) {
+  if (data.checkOut && _isRealYmd(data.checkOut)) {
     checkOutIST = String(data.checkOut).trim();
   }
   if (checkOutIST < checkInIST) checkOutIST = checkInIST;
@@ -289,7 +289,7 @@ function confirmBooking(bookingId, vehicleId, payment, operatorName, token) {
 // charged a late fee for the days they paid to extend.
 function extendBooking(bookingId, newCheckOut, payment, token) {
   requireAdmin(token);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(newCheckOut || '').trim())) {
+  if (!_isRealYmd(newCheckOut)) {
     throw new Error('Pick a valid new return date.');
   }
   const lock = LockService.getScriptLock();
@@ -421,7 +421,7 @@ function editBooking(bookingId, data, token) {
 
     // Dates + money — PENDING only (no cash has moved yet, so recompute freely).
     if (st === 'Pending' && (data.checkIn !== undefined || data.checkOut !== undefined)) {
-      const ymd = function (s, def) { return (s && /^\d{4}-\d{2}-\d{2}$/.test(String(s).trim())) ? String(s).trim() : def; };
+      const ymd = function (s, def) { return _isRealYmd(s) ? String(s).trim() : def; };
       const checkIn = ymd(data.checkIn, _ymd(booking[BC.CHECK_IN]));
       let   checkOut = ymd(data.checkOut, _ymd(booking[BC.CHECK_OUT]));
       if (checkOut < checkIn) checkOut = checkIn;
@@ -442,6 +442,57 @@ function editBooking(bookingId, data, token) {
 
     _bumpDataVersion();
     return out;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ─── Admin — Swap the scooter allocated to an Active booking ─────────────────
+// A rented scooter breaks down mid-rental: move the booking onto a different one
+// without touching money. Same rent/deposit as already collected — only the
+// booking's VEHICLE_ID/VEHICLE_LABEL change (no ledger rows, no RENT_*/DEPOSIT_*
+// columns touched). The old scooter goes to Available, Maintenance, or Charging
+// (the desk's call); the new one goes Out — exactly like confirmBooking's allocation.
+function swapBookingVehicle(bookingId, newVehicleId, oldStatus, token) {
+  requireAdmin(token);
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+    const sheet = _getBookingsSheet();
+    const data  = sheet.getDataRange().getValues();
+    let targetRow = -1, booking = null;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][BC.BOOKING_ID]) === bookingId) { targetRow = i + 1; booking = data[i]; break; }
+    }
+    if (!booking) throw new Error('Booking not found: ' + bookingId);
+    const st = String(booking[BC.STATUS]);
+    if (st !== 'Active') throw new Error('Only an active booking has a scooter to swap — a pending booking has no vehicle allocated yet.');
+
+    const oldVehicleId = String(booking[BC.VEHICLE_ID] || '');
+    const oldLabel      = String(booking[BC.VEHICLE_LABEL] || '');
+
+    const vehicle = _getVehiclesData().find(v => v.vehicleId === newVehicleId);
+    if (!vehicle) throw new Error('Vehicle not found.');
+    if (newVehicleId === oldVehicleId) throw new Error('That scooter is already allocated to this booking.');
+    if (vehicle.type === 'Staff') throw new Error('A staff vehicle can’t be allocated to a booking.');
+    if (vehicle.status !== 'Available' && vehicle.status !== 'Charging') throw new Error('Vehicle ' + vehicle.label + ' is not available.');
+
+    // What the OLD scooter becomes — only meaningful states; default Available.
+    let toOld = String(oldStatus || '').trim();
+    if (toOld !== 'Available' && toOld !== 'Maintenance' && toOld !== 'Charging') toOld = 'Available';
+
+    // Reassign the booking (VEHICLE_ID + VEHICLE_LABEL are contiguous — one batched write).
+    booking[BC.VEHICLE_ID]    = newVehicleId;
+    booking[BC.VEHICLE_LABEL] = vehicle.label;
+    sheet.getRange(targetRow, BC.VEHICLE_ID + 1, 1, BC.VEHICLE_LABEL - BC.VEHICLE_ID + 1)
+         .setValues([[newVehicleId, vehicle.label]]);
+
+    _setVehicleStatusById(newVehicleId, 'Out');
+    if (oldVehicleId) _setVehicleStatusById(oldVehicleId, toOld);
+
+    _bumpDataVersion();
+    return { success: true, oldLabel: oldLabel, newLabel: vehicle.label };
   } finally {
     lock.releaseLock();
   }
@@ -574,7 +625,7 @@ function createBackdatedBooking(data, token) {
   if (!data.riderName) throw new Error('Rider name is required.');
 
   const rates = resolveRatesForBooking();
-  const ymd = function (s, def) { return (s && /^\d{4}-\d{2}-\d{2}$/.test(String(s).trim())) ? String(s).trim() : def; };
+  const ymd = function (s, def) { return _isRealYmd(s) ? String(s).trim() : def; };
   const todayIST = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd');
   const checkIn  = ymd(data.checkIn, todayIST);
   let   checkOut = ymd(data.checkOut, checkIn);

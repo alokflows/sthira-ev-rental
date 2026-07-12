@@ -1148,6 +1148,16 @@
       ? '<div><label class="field-label">Check-in</label><input id="eb-checkin" class="field" type="date" value="'+esc(b.checkInYmd||'')+'"></div>'
         +'<div><label class="field-label">Check-out</label><input id="eb-checkout" class="field" type="date" value="'+esc(b.checkOutYmd||'')+'" min="'+esc(b.checkInYmd||'')+'"></div>'
       : '';
+    // Active only — swap the allocated scooter (e.g. it broke down). Keep = ''.
+    var vehicleHtml = '';
+    if(b.status==='Active'){
+      var vopts='<option value="">Keep current — '+esc(b.vehicleLabel||'—')+'</option>'
+        +availableVehicles().map(function(v){ return '<option value="'+esc(v.vehicleId)+'">'+esc(v.label)+(v.status==='Charging'?' · ⚡ charging':'')+'</option>'; }).join('');
+      vehicleHtml = '<div class="gf" style="margin-bottom:14px;">'
+        +'<div class="full"><label class="field-label">Scooter</label><select id="eb-vehicle" class="field">'+vopts+'</select></div>'
+        +'<div id="eb-oldstatus-row" class="full hidden"><label class="field-label">Current scooter ('+esc(b.vehicleLabel||'—')+') becomes</label><select id="eb-oldstatus" class="field"><option value="Available">Available</option><option value="Charging">Charging</option><option value="Maintenance">Maintenance</option></select></div>'
+        +'</div>';
+    }
     var body='<div class="gf">'
       +'<div class="full"><label class="field-label">Guest name *</label><input id="eb-name" class="field" value="'+esc(b.riderName)+'"></div>'
       +'<div><label class="field-label">Mobile</label><input id="eb-mobile" class="field" type="tel" value="'+esc(b.mobile)+'"></div>'
@@ -1156,6 +1166,7 @@
       +'<div><label class="field-label">Email</label><input id="eb-email" class="field" type="email" value="'+esc(b.email||'')+'"></div>'
       +'<div class="full"><label class="field-label">Driving licence</label><input id="eb-dl" class="field" value="'+esc(b.dlNumber||'')+'"></div>'
       +datesHtml+'</div>'
+      +vehicleHtml
       +(b.status==='Pending'
         ? '<div class="summary"><div class="sr"><span style="color:var(--muted);">New estimate</span><span id="eb-est" style="font-weight:600;">—</span></div></div>'
         : '<div style="font-size:12.5px;color:var(--muted-2);margin-top:14px;">Dates aren’t edited here on an active rental (the deposit is held). To change its length use <b>Extend</b> (more days) or <b>Process return</b> (early) — that keeps the cash exact.</div>');
@@ -1166,13 +1177,29 @@
       $('eb-checkin').onchange=function(){ if($('eb-checkout').value<$('eb-checkin').value) $('eb-checkout').value=$('eb-checkin').value; rc(); };
       $('eb-checkout').onchange=rc; rc();
     }
+    if(b.status==='Active'){
+      $('eb-vehicle').onchange=function(){ $('eb-oldstatus-row').classList.toggle('hidden', !val('eb-vehicle')); };
+    }
   }
   function submitEditBooking(){
     var name=val('eb-name'); if(!name){ flash('Guest name is required.', true); return; }
     var data={ riderName:name, mobile:val('eb-mobile'), altMobile:val('eb-alt'), cottageName:val('eb-cottage'), email:val('eb-email'), dlNumber:val('eb-dl') };
     if(window._editStatus==='Pending'){ data.checkIn=val('eb-checkin'); data.checkOut=val('eb-checkout'); }
+    var bookingId=window._editId;
+    var newVehicleId=(window._editStatus==='Active') ? val('eb-vehicle') : '';
     flash('Saving changes…');
-    return call('editBooking',[window._editId, data, A.token]).then(function(){ closeModal(); flash('Booking updated.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); });
+    if(newVehicleId){
+      var oldStatus=val('eb-oldstatus')||'Available';
+      return call('swapBookingVehicle',[bookingId, newVehicleId, oldStatus, A.token]).then(function(swapRes){
+        return call('editBooking',[bookingId, data, A.token]).then(function(){
+          closeModal(); flash('Scooter changed to '+swapRes.newLabel+' · details saved.'); silentRefresh();
+        }).catch(function(e){
+          // Vehicle swap already committed server-side — don't hide that from the desk.
+          closeModal(); silentRefresh(); flash('Scooter changed to '+swapRes.newLabel+', but details didn’t save — '+errMsg(e), true);
+        });
+      }).catch(function(e){ flash(errMsg(e), true); });
+    }
+    return call('editBooking',[bookingId, data, A.token]).then(function(){ closeModal(); flash('Booking updated.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); });
   }
 
   // ── Handover ──

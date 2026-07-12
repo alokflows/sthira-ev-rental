@@ -82,6 +82,18 @@ function _ymd(value) {
   return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, 'Asia/Kolkata', 'yyyy-MM-dd');
 }
 
+// True only for a REAL calendar date in 'YYYY-MM-DD' form. The shape regex alone
+// lets month '13' or day '40' through, and Date.UTC() silently rolls those into the
+// next month/year — daysInclusive would then bill wildly wrong day counts. Every
+// booking date accepted from a client must pass through this.
+function _isRealYmd(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim());
+  if (!m) return false;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
 // Returns the UTC Date for an IST wall-clock time (HH:MM) on a yyyy-mm-dd date.
 // The rental deadline is configurable (Settings → rentalEndTime); IST is UTC+5:30,
 // so we subtract 5h30m. Date.UTC() normalizes the negative minute/hour overflow.
