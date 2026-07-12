@@ -41,6 +41,7 @@ function getDashboardData(token, bDataIn, hDataIn) {
   const fleetOut         = vehicles.filter(v => v.status === 'Out').length;
   const fleetAvailable   = vehicles.filter(v => v.status === 'Available').length;
   const fleetMaintenance = vehicles.filter(v => v.status === 'Maintenance').length;
+  const fleetCharging    = vehicles.filter(v => v.status === 'Charging').length;
 
   // ── Booking stats ────────────────────────────────────────────────────────
   let pending = 0, active = 0, returnedToday = 0, newToday = 0, dueToday = 0;
@@ -119,7 +120,7 @@ function getDashboardData(token, bDataIn, hDataIn) {
   }
 
   return {
-    fleet: { total: fleetTotal, out: fleetOut, available: fleetAvailable, maintenance: fleetMaintenance },
+    fleet: { total: fleetTotal, out: fleetOut, available: fleetAvailable, maintenance: fleetMaintenance, charging: fleetCharging },
     bookings: { pending, active, dueToday, newToday, returnedToday },
     overdueBookings: overdueBookings,
     accounting: accounting,

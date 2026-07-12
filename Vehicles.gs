@@ -19,7 +19,8 @@ function _getVehiclesData() {
       notes:     String(data[i][VC.NOTES] || ''),
       addedOn:   data[i][VC.ADDED_ON]
         ? Utilities.formatDate(new Date(data[i][VC.ADDED_ON]), 'Asia/Kolkata', 'dd MMM yyyy')
-        : ''
+        : '',
+      location:  String(data[i][VC.LOCATION] || '')
     });
   }
   return rows;
@@ -27,12 +28,13 @@ function _getVehiclesData() {
 
 // Public (no auth) — ONLY the count of rental scooters free right now. No ids, no
 // PII, no booking data. Availability is defined exactly as the admin fleet view
-// (AdminJS availableVehicles): a Rental vehicle whose status is 'Available'
-// (i.e. not Out, Maintenance, or Staff). Folded into getPublicSettings so the
+// (AdminJS availableVehicles): a Rental vehicle whose status is 'Available' or
+// 'Charging' (Charging still counts as bookable — the yard just unplugs it; only
+// Out, Maintenance, or Staff are excluded). Folded into getPublicSettings so the
 // rider form gets it on its existing boot round-trip — no extra server call.
 function getPublicAvailableCount() {
   return _getVehiclesData().filter(function (v) {
-    return v.status === 'Available' && v.type !== 'Staff';
+    return (v.status === 'Available' || v.status === 'Charging') && v.type !== 'Staff';
   }).length;
 }
 
@@ -69,10 +71,11 @@ function updateVehicle(vehicleId, updates, token) {
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][VC.VEHICLE_ID]) === vehicleId) {
-      if (updates.label  !== undefined) sheet.getRange(i + 1, VC.LABEL  + 1).setValue(updates.label);
-      if (updates.status !== undefined) sheet.getRange(i + 1, VC.STATUS + 1).setValue(updates.status);
-      if (updates.type   !== undefined) sheet.getRange(i + 1, VC.TYPE   + 1).setValue(updates.type);
-      if (updates.notes  !== undefined) sheet.getRange(i + 1, VC.NOTES  + 1).setValue(updates.notes);
+      if (updates.label    !== undefined) sheet.getRange(i + 1, VC.LABEL    + 1).setValue(updates.label);
+      if (updates.status   !== undefined) sheet.getRange(i + 1, VC.STATUS   + 1).setValue(updates.status);
+      if (updates.type     !== undefined) sheet.getRange(i + 1, VC.TYPE     + 1).setValue(updates.type);
+      if (updates.notes    !== undefined) sheet.getRange(i + 1, VC.NOTES    + 1).setValue(updates.notes);
+      if (updates.location !== undefined) sheet.getRange(i + 1, VC.LOCATION + 1).setValue(updates.location);
       _bumpDataVersion();
       return { success: true };
     }
@@ -85,6 +88,22 @@ function setVehicleStatus(vehicleId, status, token) {
   const ok = _setVehicleStatusById(vehicleId, status);
   if (ok) _bumpDataVersion();
   return ok ? { success: true } : { success: false, message: 'Vehicle not found.' };
+}
+
+// Tiny, dedicated setter for the fleet's quick "where is it" note — set the
+// scooter's Location cell without touching status. Admin-only.
+function setVehicleLocation(vehicleId, location, token) {
+  requireAdmin(token);
+  const sheet = _getVehiclesSheet();
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][VC.VEHICLE_ID]) === vehicleId) {
+      sheet.getRange(i + 1, VC.LOCATION + 1).setValue(location || '');
+      _bumpDataVersion();
+      return { success: true };
+    }
+  }
+  return { success: false, message: 'Vehicle not found.' };
 }
 
 // Returns current vehicle status enriched with the active rider (if Out)

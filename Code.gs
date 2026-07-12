@@ -20,7 +20,7 @@ function _getSS() {
   const ss = SpreadsheetApp.create('Sthira Rentals — Data');
   props.setProperty('SPREADSHEET_ID', ss.getId());
   if (!_setupBuilding) {
-    ['SETUP_DONE', 'COLS_MIGRATED', 'MONEY_MIGRATED', 'CANCEL_MIGRATED']
+    ['SETUP_DONE', 'COLS_MIGRATED', 'MONEY_MIGRATED', 'CANCEL_MIGRATED', 'VEH_COLS_MIGRATED']
       .forEach(k => props.deleteProperty(k));
     try { _ensureSetup(); } catch (e) { Logger.log('_getSS recovery rebuild failed: ' + e.message); }
   }
@@ -58,6 +58,12 @@ function _ensureSetup() {
       _ensureCancelColumns();
       props.setProperty('CANCEL_MIGRATED', 'yes');
     }
+    // Vehicles.Location column (Charging status support). Its own flag so it runs
+    // exactly once on an already-live sheet.
+    if (props.getProperty('VEH_COLS_MIGRATED') !== 'yes') {
+      _ensureVehicleColumns();
+      props.setProperty('VEH_COLS_MIGRATED', 'yes');
+    }
     return;
   }
   // Full build. Flag it so a _getSS() call made while building (the sheet is created
@@ -70,10 +76,12 @@ function _ensureSetup() {
     _ensureOperatorColumns();
     _ensureHandoverColumns();
     _ensureLedgerSheet();
+    _ensureVehicleColumns();
     props.setProperty('SETUP_DONE', 'yes');
     props.setProperty('COLS_MIGRATED', 'yes');
     props.setProperty('MONEY_MIGRATED', 'yes');
     props.setProperty('CANCEL_MIGRATED', 'yes');
+    props.setProperty('VEH_COLS_MIGRATED', 'yes');
   } finally {
     _setupBuilding = false;
   }

@@ -201,7 +201,7 @@ function confirmBooking(bookingId, vehicleId, payment, operatorName, token) {
     // Validate vehicle availability
     const vehicle = _getVehiclesData().find(v => v.vehicleId === vehicleId);
     if (!vehicle) throw new Error('Vehicle not found.');
-    if (vehicle.status !== 'Available') throw new Error('Vehicle ' + vehicle.label + ' is not available.');
+    if (vehicle.status !== 'Available' && vehicle.status !== 'Charging') throw new Error('Vehicle ' + vehicle.label + ' is not available.');
 
     // Resolve payment amounts
     const rentAmount    = Number(booking[BC.RENT_AMOUNT]);

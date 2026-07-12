@@ -3,7 +3,7 @@
 const SHEET_HEADERS = {
   Settings:    ['Key', 'Value'],
   SettingsLog: ['Timestamp', 'Key', 'OldValue', 'NewValue', 'ChangedBy'],
-  Vehicles:    ['VehicleId', 'Label', 'Status', 'Type', 'Notes', 'AddedOn'],
+  Vehicles:    ['VehicleId', 'Label', 'Status', 'Type', 'Notes', 'AddedOn', 'Location'],
   Bookings: [
     'BookingId', 'CreatedAt', 'Status',
     'RiderName', 'DLNumber', 'CottageName', 'Mobile', 'AltMobile',
@@ -71,8 +71,12 @@ const BC = {
   CANCELLED_BY:        37
 };
 
-const VC = { VEHICLE_ID: 0, LABEL: 1, STATUS: 2, TYPE: 3, NOTES: 4, ADDED_ON: 5 };
+const VC = { VEHICLE_ID: 0, LABEL: 1, STATUS: 2, TYPE: 3, NOTES: 4, ADDED_ON: 5, LOCATION: 6 };
 // Type values: 'Rental' (available to riders) | 'Staff' (internal management use)
+// Status values: 'Available' | 'Out' | 'Maintenance' | 'Charging' | 'Staff'.
+// Charging (unlike Maintenance) still counts as available/bookable — the desk can
+// allocate a Charging scooter and have the yard unplug it.
+// Location: free short text, e.g. Yard / Charging point / Pickup point.
 
 // ─── Initialization ────────────────────────────────────────────────────────────
 
@@ -195,7 +199,7 @@ function _resetAndSetup(force) {
 
   // Clear the install/migration guards so _ensureSetup rebuilds from scratch and every
   // append-only migration re-runs on the fresh sheet. KEEP PIN_SECRET (PIN hashes).
-  ['SPREADSHEET_ID', 'SETUP_DONE', 'COLS_MIGRATED', 'MONEY_MIGRATED', 'CANCEL_MIGRATED']
+  ['SPREADSHEET_ID', 'SETUP_DONE', 'COLS_MIGRATED', 'MONEY_MIGRATED', 'CANCEL_MIGRATED', 'VEH_COLS_MIGRATED']
     .forEach(k => props.deleteProperty(k));
   props.setProperty('DATA_VERSION', '0');
 
@@ -219,6 +223,22 @@ function _countDataRows(ss, tabName) {
     if (!sh) return 0;
     return Math.max(0, sh.getLastRow() - 1);
   } catch (e) { return 0; }
+}
+
+// Migration: append the Location column to a Vehicles sheet made before it existed.
+// Append-only (never reorders) so the positional VC indices stay valid. Idempotent.
+function _ensureVehicleColumns() {
+  try {
+    const sheet = _getSS().getSheetByName('Vehicles');
+    if (!sheet || sheet.getLastColumn() === 0) return;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+    if (headers.indexOf('Location') === -1) {
+      sheet.getRange(1, sheet.getLastColumn() + 1)
+        .setValue('Location').setFontWeight('bold').setBackground('#2F5D50').setFontColor('#FFFFFF');
+    }
+  } catch (e) {
+    Logger.log('_ensureVehicleColumns failed: ' + e.message);
+  }
 }
 
 // ─── Vehicle status helper ─────────────────────────────────────────────────────
