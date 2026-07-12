@@ -608,11 +608,11 @@
     try{ if(navigator.vibrate) navigator.vibrate([200,100,200]); }catch(e){}
     try{
       if(('Notification' in window) && Notification.permission==='granted'){
-        var n = new Notification('Bring out '+(task.vehicleLabel||'a scooter'), { body:(task.riderName||'Guest')+' · '+task.mobile });
+        var n = new Notification('New booking: Bring out '+(task.vehicleLabel||'a scooter'), { body:'Tap to view location and guest details in the Yard.' });
         n.onclick = function(){ window.focus(); if(A.view!=='yard') gotoView('yard'); };
       }
     }catch(e){}
-    flash('Bring out '+(task.vehicleLabel||'a scooter')+' for '+(task.riderName||'a guest')+'.');
+    flash('New booking: Bring out '+(task.vehicleLabel||'a scooter')+'.');
   }
   // Must run inside the tap that calls it — requestPermission + AudioContext.resume()
   // both require a live user gesture (autoplay/notification policy).
