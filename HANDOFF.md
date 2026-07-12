@@ -25,7 +25,8 @@ Check `progress.md` to see the full history of what has been accomplished so far
 * **The Bug**: Inside the new Fleet card's "Manage Scooter" expandable popup, the red "Delete Scooter" button has a hard-coded white/light-red background (`background:#FEF2F2;`). When the user switches to Dark Mode, this hard-coded color blinds the user and breaks the dark aesthetic.
 * **The Fix**: Remove the hard-coded hex colors (`#FEF2F2` / `#FCA5A5`) from the delete button's inline style in `openFleetVehicleDetails`. Use standard CSS variables (like `var(--terra-tint)` and `var(--terra)`) so that the background and border adapt perfectly when toggled to Dark Mode.
 
-## 6. General Instructions
+## 6. General Instructions & Strict Rules
+* **CRITICAL WARNING**: NEVER use hard-coded hex colors (like `#FFFFFF` or `#FEF2F2`) when building or modifying UI components. This app has a dynamic Light/Dark mode. If you hard-code colors, you will blind the user when they switch to Dark Mode. ALWAYS use the established CSS variables (e.g. `var(--card)`, `var(--terra-tint)`, `var(--txt-1)`). Do not make the user repeat this rule. Anticipate the dark mode aesthetic for every single element you touch.
 * Review `AdminJS.html` and `Admin.html` where these UI components live. 
 * Test your changes mentally to ensure they do not break the new Expandable Modal pattern for Fleet cards. 
-* Be perfect. Keep the codebase professional.
+* Be surgical, don't mess up, and keep the codebase professional.
