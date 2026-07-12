@@ -260,6 +260,11 @@
     Array.prototype.forEach.call(document.querySelectorAll('.nav-btn,.bn-btn'), function(b){
       b.classList.toggle('hidden', hideViews.indexOf(b.getAttribute('data-view'))>=0);
     });
+    if(A.role==='Yard') {
+      var nbb=$('newBookingBtn'); if(nbb) nbb.style.display='none';
+      var ab=$('alertsBtn'); if(ab) ab.style.display='none';
+      var bnav=document.querySelector('.bottom-nav'); if(bnav) bnav.style.display='none';
+    }
   }
   // ── Light / dark theme ──
   var MOON_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
@@ -638,9 +643,9 @@
     var nextMaint=v.status==='Maintenance'?'Available':'Maintenance';
     var btns='';
     if(v.status!=='Out'){
+      btns+='<button class="veh-ib" data-action="yard-location" data-id="'+esc(v.vehicleId)+'" title="Set location" style="width:44px;height:44px;border-radius:12px;">'+IB_PIN+'</button>';
       btns+='<button class="veh-ib" data-action="yard-toggle" data-id="'+esc(v.vehicleId)+'" data-status="'+nextCharge+'" title="'+(v.status==='Charging'?'Charged — mark available':'Plug in to charge')+'" style="width:44px;height:44px;border-radius:12px;">'+(v.status==='Charging'?IB_C:IB_L)+'</button>';
       btns+='<button class="veh-ib" data-action="yard-toggle" data-id="'+esc(v.vehicleId)+'" data-status="'+nextMaint+'" title="'+(v.status==='Maintenance'?'Mark available':'Send to maintenance')+'" style="width:44px;height:44px;border-radius:12px;">'+(v.status==='Maintenance'?IB_C:IB_W)+'</button>';
-      btns+='<button class="veh-ib" data-action="yard-location" data-id="'+esc(v.vehicleId)+'" title="Set location" style="width:44px;height:44px;border-radius:12px;">'+IB_PIN+'</button>';
     }
     return '<div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px;">'
       +'<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;"><span style="font-family:var(--mono);font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.label)+'</span><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';flex:none;">'+sm.label+'</span></div>'
@@ -1542,8 +1547,10 @@
     var label=val('av-label'); if(!label){ flash('Enter a scooter number.', true); return; }
     if((C.vehicles||[]).some(function(v){ return String(v.label||'').trim().toLowerCase()===label.toLowerCase(); })){ flash('A scooter “'+label+'” already exists.', true); return; }
     var type=val('av-type'), notes=val('av-notes');
-    flash('Adding to fleet…');
-    return call('addVehicle',[label, type, notes, A.token]).then(function(){ closeModal(); flash(label+' added to the fleet.'); silentRefresh(); }).catch(function(e){ flash(errMsg(e), true); });
+    closeModal(); beginMut();
+    (C.vehicles=C.vehicles||[]).push({ vehicleId:'temp_'+Date.now(), label:label, type:type, notes:notes, status:'Available', location:'' });
+    renderFleet(); flash(label+' added to the fleet.');
+    call('addVehicle',[label, type, notes, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
   }
 
   // ════════ BOOKING DETAILS (overlay — instant, from cache) ════════
@@ -1672,6 +1679,7 @@
     call('setVehicleStatus',[id, status, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
   }
   function vehDelete(id){
+    if(!confirm('Are you sure you want to remove this vehicle?')) return;
     beginMut();
     C.vehicles=(C.vehicles||[]).filter(function(v){ return v.vehicleId!==id; }); renderFleet(); flash('Scooter removed.');
     call('deleteVehicle',[id, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });

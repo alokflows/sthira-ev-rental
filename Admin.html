@@ -3,6 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Yard Fleet">
+  <link rel="apple-touch-icon" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%2322332C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18"/><circle cx="12" cy="12" r="2.2" fill="%2322332C" stroke="none"/></svg>'>
+  <link rel="shortcut icon" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%2322332C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18"/><circle cx="12" cy="12" r="2.2" fill="%2322332C" stroke="none"/></svg>'>
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#22332C">
   <title>Sthira — Desk</title>
   <script>(function(){try{if(localStorage.getItem('sthira_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
   <?!= include('Styles'); ?>
@@ -43,7 +50,7 @@
     @media(max-width:860px){.main{height:auto;padding-bottom:78px;}}
     .topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:22px 34px 18px;flex:none;position:sticky;top:0;z-index:20;
       background:var(--topbar);backdrop-filter:blur(10px);border-bottom:1px solid var(--line-3);}
-    @media(max-width:860px){.topbar{padding:18px 16px 14px;position:static;}}
+    @media(max-width:860px){.topbar{padding:18px 16px 14px;position:sticky;top:0;}}
     .topbar .day{font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;}
     .topbar h1{font-family:var(--serif);font-weight:500;margin:2px 0 0;font-size:26px;line-height:1.05;}
     .icon-btn{position:relative;width:42px;height:42px;border-radius:13px;border:1px solid var(--line-3);background:var(--card);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt-2);flex:none;}
