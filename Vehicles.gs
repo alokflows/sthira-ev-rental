@@ -34,7 +34,7 @@ function _getVehiclesData() {
 // rider form gets it on its existing boot round-trip — no extra server call.
 function getPublicAvailableCount() {
   return _getVehiclesData().filter(function (v) {
-    return (v.status === 'Available' || v.status === 'Charging') && v.type !== 'Staff';
+    return v.status === 'Available' && v.type !== 'Staff';
   }).length;
 }
 

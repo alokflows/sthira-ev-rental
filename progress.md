@@ -53,3 +53,9 @@ Codebase is stable. No backend `.gs` controllers were mutated, ensuring no schem
 ## 9. Final Polish & Professional UX
 * **Professional Login Branding**: Rewrote the login screen copy. Replaced the generic "calm desk" phrase with "Authorized Personnel Only / Sthira Fleet Management System" to convey strict professionalism.
 * **Guest Form Polish**: Fixed a scrolling obstruction in the Guest Rider Form (`RiderForm.html`) by converting the light/dark theme toggle from `position: fixed` to `position: absolute`. It now scrolls out of the way natively. Re-instated `position: sticky` on the Admin dashboard topbar.
+
+## 10. Fleet UX Redesign & Availability Rules
+* **Fleet Card Redesign (`renderFleet`)**: Rebuilt the Fleet dashboard cards to match the spacious, intuitive design of the Yard cards. The layout now features large, touch-friendly, centered action buttons at the bottom.
+* **Temporary IDs Hidden**: Stopped rendering the system `vehicleId` (e.g. `temp_17...` or `EV001`) on the Fleet cards entirely to prevent clutter and confusion with the custom scooter labels.
+* **Messy Notes Removed**: Removed the display of the `v.notes` field from the primary card UI to prevent messy data entry (e.g., users typing "Idle at desk and charging") from overriding the clean system statuses.
+* **Charging Availability Rule**: Modified `availableVehicles()` and `getPublicAvailableCount()` so that scooters with the 'Charging' status are **no longer bookable** by the public or the desk. They must be explicitly moved to 'Available' by the Yard/Desk first.
