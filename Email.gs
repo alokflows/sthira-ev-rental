@@ -17,7 +17,7 @@ const STHIRA_TERMS = [
   ]},
   { n: '03', title: 'Route Restrictions & Timings', strict: true, rows: [
     { zone: 'Adiyogi Access', rule: 'To visit Adiyogi, riders must exclusively use the Neelivasal gate. Exiting through Kshetra Vasal or any other gate is strictly not allowed. Riders may proceed up to the Kalbhairava Temple, but must strictly not cross the Malai Vasal Gate.' },
-    { zone: 'Welcome Point', rule: 'EVs are strictly prohibited from passing through the Welcome Point at all times. Riders must not take any rental EV through the Welcome Point under any circumstances.' },
+    { zone: 'Welcome Point', rule: 'Between 7:30 AM and 7:30 PM, EVs must not pass through the Welcome Point under any circumstances. Outside these hours, riders may use the Welcome Point route to exit or return.' },
     { zone: 'Return Journey', rule: 'Riders must return using the exact same path: through Adiyogi and re-entering through Neelivasal. All rental EVs must be inside the Isha Yoga Center boundary before 8:00 PM.' },
     { zone: 'Biksha Hall Route', rule: 'To protect sadhakas and pedestrians during meal times, EV movement is restricted during the 1st and 2nd batches. Security will halt vehicles during these windows.', subs: ['Brunch: no entry 9:45–10:00 AM and 10:30–10:45 AM.', 'Dinner: no entry 6:45–7:00 PM and 7:30–7:45 PM.'] }
   ]},

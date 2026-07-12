@@ -354,8 +354,10 @@
 
   // ── Map zoom + pan ──────────────────────────────────────────────────────
   // The frame is a fixed clipping viewport ("the TV") — it never moves. Only the
-  // image inside is transformed: pinch (two fingers) or scroll-wheel to zoom, one
-  // finger / mouse to pan. After ~3s of no interaction it eases back to fit.
+  // image inside is transformed: two-finger pinch or ctrl+scroll-wheel to zoom.
+  // At rest (scale 1) one finger scrolls the page normally — the map never traps
+  // page scrolling. Once zoomed, one finger / mouse-drag pans the image, and after
+  // ~3s of no interaction it eases back to fit (which also frees page scrolling again).
   function wireMapZoom() {
     var img = els.mapImg, frame = document.getElementById('mapFrame');
     if (!img || !frame) return;
@@ -369,7 +371,12 @@
     function apply(animate) {
       img.style.transition = animate ? 'transform .45s cubic-bezier(.22,.61,.36,1)' : 'none';
       img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
-      frame.classList.toggle('zoomed', scale > 1.01);
+      var isZoomed = scale > 1.01;
+      frame.classList.toggle('zoomed', isZoomed);
+      // At rest, hand single-finger touch back to the browser (page scroll); once
+      // zoomed, claim it fully so one finger pans the image instead. Every reset
+      // path (idle timeout, dblclick reset, pinch back to 1) runs through here.
+      frame.style.touchAction = isZoomed ? 'none' : 'pan-y';
     }
     function clamp() {
       var fw = frame.clientWidth, fh = frame.clientHeight;
@@ -390,14 +397,18 @@
     function frameXY(e) { var r = frame.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
 
     frame.addEventListener('pointerdown', function (e) {
-      try { frame.setPointerCapture(e.pointerId); } catch (x) {}
+      // Don't capture / claim a lone pointer at rest — let it fall through to the
+      // browser as a normal page-scroll touch. Only claim it once it's part of a
+      // pinch (2nd pointer) or a pan-while-zoomed gesture.
       pts[e.pointerId] = { x: e.clientX, y: e.clientY };
       var ids = Object.keys(pts);
       if (ids.length === 2) {
+        try { frame.setPointerCapture(e.pointerId); } catch (x) {}
         var a = pts[ids[0]], b = pts[ids[1]], r = frame.getBoundingClientRect();
         sDist = Math.hypot(a.x - b.x, a.y - b.y); sScale = scale; sTx = tx; sTy = ty;
         sMidX = (a.x + b.x) / 2 - r.left; sMidY = (a.y + b.y) / 2 - r.top;
       } else if (ids.length === 1 && scale > 1.01) {
+        try { frame.setPointerCapture(e.pointerId); } catch (x) {}
         panId = e.pointerId; panX = e.clientX; panY = e.clientY;
       }
       if (idle) clearTimeout(idle);
@@ -425,7 +436,18 @@
     }
     frame.addEventListener('pointerup', endPointer);
     frame.addEventListener('pointercancel', endPointer);
+    // Two-finger touch: stop the browser's own page-pinch so our pinch math above
+    // (driven by pointermove) is the only thing that zooms. Single-finger touch at
+    // rest is left alone so the page scrolls; single-finger touch while zoomed also
+    // needs preventDefault so the pan above isn't fighting a page scroll.
+    frame.addEventListener('touchmove', function (e) {
+      if (e.touches.length >= 2 || scale > 1.01) e.preventDefault();
+    }, { passive: false });
     frame.addEventListener('wheel', function (e) {
+      // Plain wheel/trackpad scroll over the map should scroll the page, like any
+      // other content. Only claim it as a zoom gesture when ctrl is held (trackpad
+      // pinch / ctrl+wheel) or the map is already zoomed in.
+      if (!(e.ctrlKey || scale > 1.01)) return;
       e.preventDefault();
       var xy = frameXY(e); zoomAt(xy[0], xy[1], scale * (e.deltaY < 0 ? 1.15 : 0.87));
       scheduleReset();
