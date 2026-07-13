@@ -1184,6 +1184,15 @@
       +'<div class="donut-center"><div class="dc-val">'+centerVal+'</div><div class="dc-lbl">'+centerLbl+'</div></div></div>'
       +'<div class="rpt-legend">'+legend+'</div></div>';
   }
+  // Compact mini-donut for Quick Glance strip
+  function _miniDonut(pieces, title){
+    // pieces: [{pct, color, lbl}] — pct of the PRIMARY segment (first item) shown in center
+    var grad=pieces.map(function(p,i){ var off=0; for(var j=0;j<i;j++) off+=pieces[j].pct; return p.color+' '+off+'% '+off+'pct'; }).join(',');
+    var legend=pieces.map(function(p){ return '<b>'+p.pct+'%</b> '+esc(p.lbl); }).join(' · ');
+    return '<div class="rpt-glance-item"><div class="rg-donut" style="background:conic-gradient('+grad+');">'
+      +'<div class="rg-center"><div class="rg-val">'+pieces[0].pct+'%</div></div></div>'
+      +'<div class="rg-title">'+esc(title)+'</div><div class="rg-legend">'+legend+'</div></div>';
+  }
   function _hbar(items, maxVal){
     if(!items.length) return '<div class="empty">No data.</div>';
     var mx=maxVal||Math.max(1,Math.max.apply(null,items.map(function(r){return r.val;})));
@@ -1240,6 +1249,30 @@
     // Insight box
     var insight=_insightBox(rpt);
 
+    // Quick Glance — 4 compact donuts for instant readability
+    var f=rpt.fleet, fAll=f.total||1;
+    var revTotal=c.totalRevenue||0;
+    var payTotal=c.cashTotal+c.upiTotal||0;
+    var bkTotal=c.funnel.pending+c.funnel.active+c.funnel.returned+c.funnel.cancelled||0;
+    function _gd(pct,color,lbl){ return {pct:Math.max(0,Math.min(100,Math.round(pct))),color:color,lbl:lbl}; }
+    var glance='<div class="rpt-glance">'
+      +(revTotal?_miniDonut([_gd(c.totalRent/revTotal*100,'var(--pine)','Rent'),_gd(100-c.totalRent/revTotal*100,'var(--gold)','Late fees')],'Revenue Mix')
+        :'<div class="rpt-glance-item"><div class="rg-donut" style="background:var(--surface-2);"><div class="rg-center"><div class="rg-val" style="font-size:14px;color:var(--faint);">—</div></div></div><div class="rg-title">Revenue Mix</div><div class="rg-legend">No revenue</div></div>')
+      +(payTotal?_miniDonut([_gd(c.cashTotal/payTotal*100,'var(--pine)','Cash'),_gd(100-c.cashTotal/payTotal*100,'var(--gold)','UPI')],'Collection')
+        :'<div class="rpt-glance-item"><div class="rg-donut" style="background:var(--surface-2);"><div class="rg-center"><div class="rg-val" style="font-size:14px;color:var(--faint);">—</div></div></div><div class="rg-title">Collection</div><div class="rg-legend">No payments</div></div>')
+      +_miniDonut([
+        _gd(f.out/fAll*100,'var(--terra)','Out'),
+        _gd(f.available/fAll*100,'var(--pine)','Available'),
+        _gd(100-f.out/fAll*100-f.available/fAll*100,'var(--muted-2)','Charg/Maint')
+      ], 'Fleet Pulse')
+      +(bkTotal?_miniDonut([
+        _gd(c.funnel.returned/bkTotal*100,'var(--pine)','Returned'),
+        _gd(c.funnel.active/bkTotal*100,'var(--gold)','Active'),
+        _gd(100-c.funnel.returned/bkTotal*100-c.funnel.active/bkTotal*100,'var(--muted-2)','Pending/Cxl')
+      ], 'Booking Outcome')
+        :'<div class="rpt-glance-item"><div class="rg-donut" style="background:var(--surface-2);"><div class="rg-center"><div class="rg-val" style="font-size:14px;color:var(--faint);">—</div></div></div><div class="rg-title">Booking Outcome</div><div class="rg-legend">No bookings</div></div>')
+      +'</div>';
+
     // KPI cards
     var kpis=_kpiCard('Revenue', inr(c.totalRevenue), rpt.revenue.delta, 'Rent + late fees')
       +_kpiCard('Bookings', String(c.totalBookings), rpt.bookings.delta, '')
@@ -1257,7 +1290,7 @@
       +_funnel(c.funnel)+'</div>';
 
     // Fleet donut
-    var f=rpt.fleet;
+    f=rpt.fleet;
     var fPieces=[];
     if(f.out) fPieces.push({pct:Math.round(f.out/f.total*100),color:'var(--terra)',lbl:'Out'});
     if(f.available) fPieces.push({pct:Math.round(f.available/f.total*100),color:'var(--pine)',lbl:'Available'});
@@ -1309,7 +1342,7 @@
       +'<button class="btn btn-email" data-action="save-reports">💾 Save email</button>'
       +'</div></div>':'';
 
-    $('view-reports').innerHTML='<div class="'+animCls()+'">'+hdr+insight+'<div class="rpt-kpi">'+kpis+'</div>'
+    $('view-reports').innerHTML='<div class="'+animCls()+'">'+hdr+insight+glance+'<div class="rpt-kpi">'+kpis+'</div>'
       +revChart+funnel+fleetSec+cotSec+paySec+opTable+breakdown+exportRow+'</div>';
   }
 
