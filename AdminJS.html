@@ -211,13 +211,30 @@
   // almost always the token cache lagging by a beat — retry quietly before failing.
   // Any response from a previous auth session (you logged out/in again) is ignored,
   // so stale calls can never flash "session expired" over a fresh desk.
+  // Two-phase: getBootstrapLite (3 sheets, instant paint) → getBootstrapFull
+  // (remaining sheets, background). Yard role only loads Phase 1.
   function loadBootstrap(done, _retried){
     var gen=A.authGen;
-    call('getBootstrap',[A.token]).then(function(d){
+    call('getBootstrapLite',[A.token]).then(function(d){
       if(gen!==A.authGen) return;
-      C=d; if(d&&d.role) A.role=d.role; done(true);
+      C=d; if(d&&d.role) A.role=d.role;
+      done(true);
+      // Phase 2: heavy data in background (skip for Yard — they never need it)
+      if(A.role!=='Yard'){
+        call('getBootstrapFull',[A.token]).then(function(d2){
+          if(gen!==A.authGen) return;
+          // Merge: keep lite data but fill in the heavy fields
+          if(d2){
+            C.dashboard=d2.dashboard; C.handovers=d2.handovers;
+            C.drawers=d2.drawers; C.pendingHandovers=d2.pendingHandovers;
+            C.operatorMoney=d2.operatorMoney; C.operators=d2.operators;
+            C.settings=d2.settings; C.analytics=d2.analytics;
+          }
+          afterData();  // smooth update — no flash
+        }).catch(function(){});
+      }
     }).catch(function(e){
-      if(gen!==A.authGen) return;                                   // superseded by a newer login/logout
+      if(gen!==A.authGen) return;
       if(!_retried && A.token){ setTimeout(function(){ if(gen===A.authGen) loadBootstrap(done, true); }, 800); return; }
       flash(errMsg(e), true); done(false);
     });
@@ -321,6 +338,29 @@
   }
   function rerenderCurrent(){
     if(!C){ return renderSkeleton(); }   // data not in yet → skeleton, never a crash
+    // ── Signature cache: skip DOM rebuild when data hasn't changed ──────────
+    // Each view computes a lightweight signature of the data that affects its
+    // output.  If it matches the last render, we skip innerHTML entirely — no
+    // layout thrash, no paint.  Mutations always clear the sig (via mutateEpoch)
+    // so optimistic updates still repaint instantly.
+    var sig=A.view+':';
+    if(A.view==='yard'){
+      sig+=(C.vehicles||[]).map(function(v){return v.vehicleId+v.status+v.location;}).join()
+           +yardOpenTasks().length+(A.yardFilter||'')+(A.yardSortAlpha||'');
+    }else if(A.view==='fleet'){
+      sig+=(C.vehicles||[]).map(function(v){return v.vehicleId+v.status+v.location;}).join()
+           +(A.fleetFilter||'')+(A.fleetSortAlpha||'');
+    }else if(A.view==='overview'){
+      var dd=C.dashboard||{};
+      sig+=(dd.fleet||'').available+(dd.fleet||'').out+(dd.bookings||'').pending
+           +(dd.accounting||'').cashInHand;
+    }else if(A.view==='bookings'){
+      sig+=(C.bookings||[]).map(function(b){return b.bookingId+b.status;}).join()
+           +(A.bTab||'')+(A.search||'')+(A.bFilterStatus||'')+(A.bFilterVehicle||'')+(A.bFilterDate||'');
+    }else{ sig=0; }  // money/reports/settings always re-render (rare, not worth caching)
+    if(A.silent && A._lastViewSig===sig) return;  // silent + unchanged → skip
+    A._lastViewSig=sig;
+
     switch(A.view){
       case 'overview': return renderOverview();
       case 'bookings': return renderBookings();
@@ -340,7 +380,9 @@
     opts=opts||{};
     var seq=++refreshSeq, epoch=A.mutateEpoch;
     setSync(true);
-    return call('getBootstrap',[A.token]).then(function(d){
+    // Yard only needs lite (3 sheets). Others need full (7 sheets).
+    var fn=(A.role==='Yard') ? 'getBootstrapLite' : 'getBootstrap';
+    return call(fn,[A.token]).then(function(d){
       setSync(false);
       if(seq!==refreshSeq) return;            // superseded by a newer refresh
       if(epoch!==A.mutateEpoch) return;        // a mutation happened mid-flight → its own refresh reconciles

@@ -128,9 +128,9 @@ function _hhmm(value) {
 }
 
 // Admin (auth required) — returns everything
-function getAdminSettings(token) {
+function getAdminSettings(token, sDataIn) {
   requireAdmin(token);
-  const s = _getAllSettingsRaw();
+  const s = sDataIn || _getAllSettingsRaw();
   s.rentalStartTime = _hhmm(s.rentalStartTime) || '09:00';
   s.rentalEndTime   = _hhmm(s.rentalEndTime)   || '21:00';
   return s;
@@ -181,6 +181,10 @@ function updateSetting(key, value, operatorName, token) {
 
   const logSheet = _getSS().getSheetByName('SettingsLog');
   logSheet.appendRow([new Date(), key, oldValue, value, operatorName || 'Admin']);
+  // Cache rate-change timestamp so getDashboardData avoids reading SettingsLog.
+  if (key === 'dayRate' || key === 'depositPerWeek') {
+    PropertiesService.getScriptProperties().setProperty('RATE_CHANGED_AT', String(Date.now()));
+  }
   _bumpDataVersion();
   return { success: true };
 }

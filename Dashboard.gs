@@ -1,39 +1,73 @@
-// ─── One-shot bootstrap ─────────────────────────────────────────────────────────
-// Returns everything the desk needs in a single round-trip, so the client can
-// cache it and render every view instantly afterwards (no per-tab loading).
-function getBootstrap(token) {
+// ─── Two-phase bootstrap ────────────────────────────────────────────────────────
+// Phase 1 (getBootstrapLite):  reads 3 sheets → instant usable desk.
+// Phase 2 (getBootstrapFull):  reads remaining sheets → money/reports/settings.
+// Yard role only needs Phase 1 — never loads Phase 2.
+function getBootstrapLite(token) {
   requireAdmin(token);
-  // Read the two heavy sheets ONCE and thread them through every aggregation, so a
-  // desk load reads Bookings/Handovers once instead of ~8×/~5×.
-  const bData = _getAllBookingsRaw();
-  const hData = _getAllHandoversRaw();
-  const dashboard = getDashboardData(token, bData, hData);
+  const bData  = _getAllBookingsRaw();
+  const vData  = _getVehiclesData();
+  const sData  = _getAllSettingsRaw();
+  const role   = _opRole(token);
+  const isYard = (role === 'Yard');
+  // Fleet + booking counts + overdue — no accounting, no ledger, no SettingsLog.
+  const dashboard = getDashboardData(token, bData, null, vData, sData);
   return {
     dashboard:  dashboard,
-    bookings:   getBookingsByStatus('All', token, bData),   // all bookings; client filters/searches locally
-    vehicles:   getVehicleStatusEnriched(token, bData),
+    bookings:   getBookingsByStatus('All', token, bData),
+    vehicles:   getVehicleStatusEnriched(token, bData, vData),
+    handovers:  [],
+    drawers:    isYard ? 0 : null,   // null = "not loaded yet"
+    pendingHandovers: [],
+    operatorMoney: null,
+    operators:  [],
+    cottages:   getCottages(token),
+    settings:   getAdminSettings(token, sData),
+    analytics:  null,
+    role:       role,
+    webAppUrl:  getWebAppUrl()
+  };
+}
+
+function getBootstrapFull(token) {
+  requireAdmin(token);
+  const bData = _getAllBookingsRaw();
+  const hData = _getAllHandoversRaw();
+  const vData = _getVehiclesData();
+  const sData = _getAllSettingsRaw();
+  const role  = _opRole(token);
+  const dashboard = getDashboardData(token, bData, hData, vData, sData);
+  return {
+    dashboard:  dashboard,
+    bookings:   getBookingsByStatus('All', token, bData),
+    vehicles:   getVehicleStatusEnriched(token, bData, vData),
     handovers:  getHandoverHistory(token, hData),
     drawers:    getDrawers(token, dashboard.accounting, bData, hData),
     pendingHandovers: getPendingHandovers(token, hData),
     operatorMoney: _isManager(token) ? null : getOperatorMoney(token, bData, hData),
     operators:  getOperators(token),
     cottages:   getCottages(token),
-    settings:   getAdminSettings(token),
+    settings:   getAdminSettings(token, sData),
     analytics:  { week: getAnalyticsData('week', token, bData) },
-    role:       _opRole(token),
+    role:       role,
     webAppUrl:  getWebAppUrl()
   };
 }
 
+// Backward-compat: getBootstrap now returns the full payload (used by silentRefresh
+// which needs everything). The client calls getBootstrapLite first for instant paint.
+function getBootstrap(token) {
+  return getBootstrapFull(token);
+}
+
 // ─── Dashboard Aggregations ────────────────────────────────────────────────────
 
-function getDashboardData(token, bDataIn, hDataIn) {
+function getDashboardData(token, bDataIn, hDataIn, vDataIn, sDataIn) {
   requireAdmin(token);
 
   const bData    = bDataIn || _getAllBookingsRaw();
-  const vehicles = _getVehiclesData();
+  const vehicles = vDataIn || _getVehiclesData();
   const today    = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd');
-  const s        = _getAllSettingsRaw();
+  const s        = sDataIn || _getAllSettingsRaw();
   const endTime  = s.rentalEndTime || '21:00';   // configurable return deadline (IST)
 
   // ── Fleet stats ──────────────────────────────────────────────────────────
@@ -102,22 +136,18 @@ function getDashboardData(token, bDataIn, hDataIn) {
   }
 
   // ── Accounting ───────────────────────────────────────────────────────────
-  const accounting = getAccountingSummary(token, bData, hDataIn);
-  const todayAcc   = getTodayAccounting(token, bData);
+  // Skip ledger-heavy accounting in lite mode (hDataIn === null) — the client
+  // gets these from getBootstrapFull instead.  Saves2 ledger reads on the fast
+  // path.
+  const isLite = (hDataIn === null);
+  const accounting = isLite ? null : getAccountingSummary(token, bData, hDataIn);
+  const todayAcc   = isLite ? null : getTodayAccounting(token, bData);
 
-  // ── Rate change alert ─────────────────────────────────────────────────────
-  const logSheet = _getSS().getSheetByName('SettingsLog');
-  const logData  = logSheet.getDataRange().getValues();
-  let rateChangedRecently = false;
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
-  for (let i = 1; i < logData.length; i++) {
-    if (!logData[i][0]) continue;
-    if ((logData[i][1] === 'dayRate' || logData[i][1] === 'depositPerWeek') &&
-        new Date(logData[i][0]) > sevenDaysAgo) {
-      rateChangedRecently = true;
-      break;
-    }
-  }
+  // ── Rate change alert (cached property — set by updateSetting, avoids reading
+  // the entire SettingsLog sheet on every bootstrap) ──────────────────────────
+  const rateChangedRecently =
+    (Number(PropertiesService.getScriptProperties().getProperty('RATE_CHANGED_AT') || 0))
+    > (Date.now() - 7 * 24 * 3600 * 1000);
 
   return {
     fleet: { total: fleetTotal, out: fleetOut, available: fleetAvailable, maintenance: fleetMaintenance, charging: fleetCharging },

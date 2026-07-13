@@ -116,9 +116,9 @@ function setVehicleLocation(vehicleId, location, token) {
 }
 
 // Returns current vehicle status enriched with the active rider (if Out)
-function getVehicleStatusEnriched(token, bDataIn) {
+function getVehicleStatusEnriched(token, bDataIn, vDataIn) {
   requireAdmin(token);
-  const vehicles = _getVehiclesData();
+  const vehicles = vDataIn || _getVehiclesData();
   const bData  = bDataIn || _getSS().getSheetByName('Bookings').getDataRange().getValues();
 
   // Build a map: vehicleId → active booking
