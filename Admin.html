@@ -223,6 +223,116 @@
       .bn-btn svg{width:19px;height:19px;}
     }
     .empty{padding:42px 0;text-align:center;color:var(--faint);font-size:14.5px;}
+
+    /* ════════ REPORTS — McKinsey dashboard ════════ */
+    .rpt-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px;}
+    .rpt-header h2{font-family:var(--serif);font-weight:500;font-size:22px;margin:0;}
+    .rpt-range{display:flex;gap:7px;flex-wrap:wrap;align-items:center;}
+    .rpt-range .chip{font-size:12.5px;padding:7px 13px;}
+    .rpt-custom{display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;}
+    .rpt-custom.open{display:flex;}
+    .rpt-custom input[type="date"]{padding:8px 12px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);color:var(--ink);font-size:13px;font-family:var(--ui);}
+    .rpt-custom .btn{font-size:12.5px;padding:8px 14px;border-radius:10px;}
+
+    /* Insight callout */
+    .rpt-insight{background:var(--pine-tint);border:1px solid var(--pine-line);border-radius:16px;padding:18px 20px;margin-bottom:22px;}
+    .rpt-insight .ri-title{font-family:var(--serif);font-weight:500;font-size:15px;color:var(--pine);margin:0 0 8px;}
+    .rpt-insight ul{margin:0;padding:0;list-style:none;}
+    .rpt-insight li{font-size:13.5px;color:var(--txt-2);padding:4px 0;padding-left:18px;position:relative;line-height:1.45;}
+    .rpt-insight li::before{content:'';position:absolute;left:0;top:10px;width:8px;height:8px;border-radius:50%;background:var(--pine-soft);}
+
+    /* KPI grid */
+    .rpt-kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px;}
+    @media(max-width:600px){.rpt-kpi{grid-template-columns:repeat(2,1fr);}}
+    .kpi{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;}
+    .kpi .kpi-lbl{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);}
+    .kpi .kpi-val{font-family:var(--serif);font-size:28px;font-weight:500;margin:6px 0 4px;color:var(--ink);}
+    @media(max-width:600px){.kpi .kpi-val{font-size:22px;}}
+    .kpi .kpi-sub{font-size:12px;color:var(--muted-2);}
+    .kpi .kpi-delta{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:6px;}
+    .kpi-delta.up{color:var(--pine);background:var(--pine-tint);}
+    .kpi-delta.down{color:var(--terra);background:var(--terra-tint);}
+    .kpi-delta.flat{color:var(--faint);background:var(--surface-2);}
+
+    /* Section panel */
+    .rpt-section{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:22px;margin-bottom:18px;}
+    .rpt-section h3{font-family:var(--serif);font-weight:500;font-size:17px;margin:0 0 4px;}
+    .rpt-section .rpt-sub{font-size:12.5px;color:var(--muted-2);margin:0 0 16px;}
+
+    /* Bar chart (vertical) */
+    .rpt-bars{display:flex;align-items:flex-end;gap:6px;height:180px;padding-top:28px;overflow-x:auto;}
+    @media(max-width:600px){.rpt-bars{height:150px;gap:4px;}}
+    .rpt-bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end;min-width:28px;}
+    .rpt-bar .rb-val{font-size:10.5px;color:var(--faint);font-family:var(--mono);white-space:nowrap;}
+    .rpt-bar .rb-fill{width:100%;max-width:40px;border-radius:6px 6px 0 0;transition:height .4s ease;min-height:2px;}
+    .rpt-bar .rb-lbl{font-size:10.5px;color:var(--muted-2);white-space:nowrap;}
+    .rb-pine .rb-fill{background:var(--pine);}
+    .rb-gold .rb-fill{background:var(--gold);}
+    .rb-terra .rb-fill{background:var(--terra);}
+
+    /* Dual bar chart (stacked segments) */
+    .rpt-stacked{display:flex;align-items:flex-end;gap:6px;height:180px;padding-top:28px;overflow-x:auto;}
+    .rpt-stacked .rb-seg{display:flex;flex-direction:column-reverse;}
+
+    /* Donut chart */
+    .rpt-donut-wrap{display:flex;align-items:center;gap:28px;flex-wrap:wrap;}
+    @media(max-width:600px){.rpt-donut-wrap{justify-content:center;}}
+    .rpt-donut{width:140px;height:140px;border-radius:50%;position:relative;flex:none;}
+    .rpt-donut::after{content:'';position:absolute;inset:28px;border-radius:50%;background:var(--card);}
+    .rpt-donut .donut-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1;}
+    .rpt-donut .donut-center .dc-val{font-family:var(--serif);font-size:22px;font-weight:500;color:var(--ink);}
+    .rpt-donut .donut-center .dc-lbl{font-size:10.5px;color:var(--muted-2);margin-top:2px;}
+    .rpt-legend{display:flex;flex-direction:column;gap:8px;}
+    .rpt-legend-item{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt-2);}
+    .rpt-legend-item .dot{width:10px;height:10px;border-radius:3px;flex:none;}
+
+    /* Horizontal bar chart */
+    .rpt-hbars{display:flex;flex-direction:column;gap:10px;}
+    .rpt-hbar{display:flex;align-items:center;gap:10px;}
+    .rpt-hbar .hb-lbl{width:100px;font-size:12.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none;text-align:right;}
+    @media(max-width:600px){.rpt-hbar .hb-lbl{width:70px;font-size:11.5px;}}
+    .rpt-hbar .hb-track{flex:1;height:24px;background:var(--surface-2);border-radius:6px;overflow:hidden;position:relative;}
+    .rpt-hbar .hb-fill{height:100%;border-radius:6px;transition:width .5s ease;min-width:2px;}
+    .rpt-hbar .hb-val{width:60px;font-size:12px;font-family:var(--mono);color:var(--muted-2);flex:none;}
+
+    /* Funnel */
+    .rpt-funnel{display:flex;flex-direction:column;gap:8px;}
+    .rpt-funnel-step{display:flex;align-items:center;gap:12px;}
+    .rpt-funnel-step .fs-bar{height:32px;border-radius:8px;display:flex;align-items:center;padding:0 12px;transition:width .5s ease;min-width:32px;}
+    .rpt-funnel-step .fs-lbl{font-size:12.5px;font-weight:600;color:#fff;white-space:nowrap;text-shadow:0 1px 2px rgba(0,0,0,.15);}
+    .rpt-funnel-step .fs-meta{font-size:12px;color:var(--muted-2);white-space:nowrap;flex:none;}
+
+    /* Operator table */
+    .rpt-optable{width:100%;border-collapse:collapse;}
+    .rpt-optable th{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);text-align:left;padding:8px 12px;border-bottom:1px solid var(--line-2);}
+    .rpt-optable td{font-size:13.5px;padding:10px 12px;border-top:1px solid var(--hair);color:var(--txt-2);}
+    .rpt-optable td:nth-child(2),.rpt-optable td:nth-child(3),.rpt-optable td:nth-child(4){text-align:right;font-family:var(--mono);font-size:13px;}
+    .rpt-optable th:nth-child(2),.rpt-optable th:nth-child(3),.rpt-optable th:nth-child(4){text-align:right;}
+    .rpt-optable tr:last-child td{border-bottom:none;}
+    @media(max-width:600px){.rpt-optable{font-size:12px;}.rpt-optable td,.rpt-optable th{padding:8px 8px;}}
+
+    /* Export row */
+    .rpt-export{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;}
+    .rpt-export .btn{font-size:13px;padding:10px 16px;border-radius:12px;}
+    .rpt-export .btn-pdf{background:var(--pine);color:#fff;}
+    .rpt-export .btn-csv{border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);}
+    .rpt-export .btn-email{border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);}
+
+    /* Print styles — McKinsey PDF */
+    @media print{
+      body *{visibility:hidden;}
+      #view-reports,#view-reports *{visibility:visible;}
+      #view-reports{position:absolute;left:0;top:0;width:100%;padding:20px;background:#fff;color:#222 !important;}
+      #view-reports .rpt-export,#view-reports .rpt-range,#view-reports .rpt-custom,
+      #view-reports [data-action]{display:none !important;}
+      #view-reports .rpt-section,#view-reports .kpi{border-color:#ddd;background:#fff;box-shadow:none;}
+      #view-reports .rpt-insight{background:#f0f7f0;border-color:#cde;}
+      #view-reports .rpt-bar .rb-fill{print-color-adjust:exact;-webkit-print-color-adjust:exact;}
+      #view-reports .rpt-hbar .hb-fill{print-color-adjust:exact;-webkit-print-color-adjust:exact;}
+      #view-reports .rpt-funnel-step .fs-bar{print-color-adjust:exact;-webkit-print-color-adjust:exact;}
+      #view-reports .rpt-donut{print-color-adjust:exact;-webkit-print-color-adjust:exact;}
+      @page{size:A4;margin:12mm 14mm;}
+    }
   </style>
 </head>
 <body>
