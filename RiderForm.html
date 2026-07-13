@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#2F5D50">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Sthira">
-  <script>(function(){try{if(localStorage.getItem('sthira_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
+  <script>(function(){try{var t=localStorage.getItem('sthira_theme');if(t==='dark')document.documentElement.setAttribute('data-theme','dark');else if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches)document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
   <?!= include('Styles'); ?>
   <style>
     .rider-bg{min-height:100vh;background:radial-gradient(120% 60% at 50% 0%, var(--paper-hi) 0%, var(--paper) 60%);}

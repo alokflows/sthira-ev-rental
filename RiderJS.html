@@ -481,6 +481,8 @@
   function riderDark() { return document.documentElement.getAttribute('data-theme') === 'dark'; }
   function setRiderThemeIcon() { var b = document.getElementById('riderThemeBtn'); if (b) b.innerHTML = riderDark() ? R_SUN : R_MOON; }
   function toggleRiderTheme() { var d = document.documentElement; if (riderDark()) d.removeAttribute('data-theme'); else d.setAttribute('data-theme', 'dark'); try { localStorage.setItem('sthira_theme', riderDark() ? 'dark' : 'light'); } catch (e) {} setRiderThemeIcon(); }
+  // Follow OS theme live — only when user hasn't manually toggled.
+  (function(){ try { if (!window.matchMedia) return; var mq = window.matchMedia('(prefers-color-scheme: dark)'); mq.addEventListener('change', function() { try { if (localStorage.getItem('sthira_theme')) return; } catch (e) { return; } document.documentElement.setAttribute('data-theme', mq.matches ? 'dark' : 'light'); setRiderThemeIcon(); }); } catch (e) {} })();
 
   // ── Cottage dropdown ───────────────────────────────────────────────────
   function fillCottages(list) {

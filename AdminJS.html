@@ -306,6 +306,19 @@
   function isDark(){ return document.documentElement.getAttribute('data-theme')==='dark'; }
   function updateThemeIcon(){ var b=$('themeBtn'); if(b) b.innerHTML=isDark()?SUN_SVG:MOON_SVG; }
   function toggleTheme(){ var d=document.documentElement; if(isDark()) d.removeAttribute('data-theme'); else d.setAttribute('data-theme','dark'); try{ localStorage.setItem('sthira_theme', isDark()?'dark':'light'); }catch(e){} updateThemeIcon(); }
+  // Follow OS theme live — only when user has never manually toggled.
+  // Apple/Google pattern: system preference is the default, manual choice overrides.
+  (function(){
+    try{
+      if(!window.matchMedia) return;
+      var mq=window.matchMedia('(prefers-color-scheme: dark)');
+      mq.addEventListener('change', function(){
+        try{ if(localStorage.getItem('sthira_theme')) return; }catch(e){ return; }
+        document.documentElement.setAttribute('data-theme', mq.matches ? 'dark' : 'light');
+        updateThemeIcon();
+      });
+    }catch(e){}
+  })();
   function toggleSidebar(){
     var sb=$('appSidebar'); if(!sb) return;
     var collapsed=sb.classList.toggle('collapsed');
@@ -341,8 +354,9 @@
     // ── Signature cache: skip DOM rebuild when data hasn't changed ──────────
     // Each view computes a lightweight signature of the data that affects its
     // output.  If it matches the last render, we skip innerHTML entirely — no
-    // layout thrash, no paint.  Mutations always clear the sig (via mutateEpoch)
-    // so optimistic updates still repaint instantly.
+    // layout thrash, no paint.  Works for BOTH silent refresh AND tab switching
+    // so changing tabs is instant when nothing changed.
+    // Mutations bump mutateEpoch → _lastViewSig is stale → always repaints.
     var sig=A.view+':';
     if(A.view==='yard'){
       sig+=(C.vehicles||[]).map(function(v){return v.vehicleId+v.status+v.location;}).join()
@@ -357,8 +371,25 @@
     }else if(A.view==='bookings'){
       sig+=(C.bookings||[]).map(function(b){return b.bookingId+b.status;}).join()
            +(A.bTab||'')+(A.search||'')+(A.bFilterStatus||'')+(A.bFilterVehicle||'')+(A.bFilterDate||'');
-    }else{ sig=0; }  // money/reports/settings always re-render (rare, not worth caching)
-    if(A.silent && A._lastViewSig===sig) return;  // silent + unchanged → skip
+    }else if(A.view==='money'){
+      var ma=C.dashboard.accounting||{}, mt=C.dashboard.today||{};
+      sig+=(ma.cashInHand||0)+(ma.depositHeldTotal||0)+(ma.profit||0)+(ma.relieved||0)
+           +(mt.todayTotal||0)+(mt.todayCashIn||0)+(mt.todayUPIIn||0)
+           +JSON.stringify(C.drawers||{})+(C.pendingHandovers||[]).length
+           +JSON.stringify(C.operatorMoney||{})+(A.ledgerPeriod||'today');
+    }else if(A.view==='reports'){
+      var ra=C.analytics&&C.analytics[A.period];
+      sig+=(A.period||'week')+(ra?ra.totalRevenue+ra.totalBookings+ra.totalLateFees:'');
+    }else{  // settings
+      sig=JSON.stringify(C.settings||{});
+    }
+    if(A._lastViewSig===sig){
+      // DOM rebuild skipped — but keep background data alive.  The ledger
+      // passbook must refresh on every silent tick even if stat cards are
+      // unchanged (a return / refund just landed).
+      if(A.silent && A.view==='money') fetchLedger(true);
+      return;
+    }
     A._lastViewSig=sig;
 
     switch(A.view){
