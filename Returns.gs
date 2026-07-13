@@ -4,7 +4,7 @@ function processReturn(bookingId, returnData, token) {
   requireAdmin(token);
   // returnData: {
   //   actualReturn: Date string,
-  //   refundMode: 'same'|'cash'|'upi',
+  //   refundMode: 'same'|'cash'|'upi'|'split',
   //   deductions: [{ amount, reason }],
   //   operatorName: string,
   //   notes: string
