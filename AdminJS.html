@@ -1178,7 +1178,7 @@
   }
   function _donut(pieces, centerVal, centerLbl, total){
     // pieces: [{pct, color, lbl}]
-    var grad=pieces.map(function(p,i){ var off=0; for(var j=0;j<i;j++) off+=pieces[j].pct; return p.color+' '+off+'% '+off+'pct'; }).join(',');
+    var grad=pieces.map(function(p,i){ var start=0; for(var j=0;j<i;j++) start+=pieces[j].pct; return p.color+' '+start+'% '+(start+p.pct)+'%'; }).join(',');
     var legend=pieces.map(function(p){ return '<div class="rpt-legend-item"><span class="dot" style="background:'+p.color+';"></span>'+esc(p.lbl)+' · <b>'+p.pct+'%</b></div>'; }).join('');
     return '<div class="rpt-donut-wrap"><div class="rpt-donut" style="background:conic-gradient('+grad+');">'
       +'<div class="donut-center"><div class="dc-val">'+centerVal+'</div><div class="dc-lbl">'+centerLbl+'</div></div></div>'
@@ -1187,7 +1187,7 @@
   // Compact mini-donut for Quick Glance strip
   function _miniDonut(pieces, title){
     // pieces: [{pct, color, lbl}] — pct of the PRIMARY segment (first item) shown in center
-    var grad=pieces.map(function(p,i){ var off=0; for(var j=0;j<i;j++) off+=pieces[j].pct; return p.color+' '+off+'% '+off+'pct'; }).join(',');
+    var grad=pieces.map(function(p,i){ var start=0; for(var j=0;j<i;j++) start+=pieces[j].pct; return p.color+' '+start+'% '+(start+p.pct)+'%'; }).join(',');
     var legend=pieces.map(function(p){ return '<b>'+p.pct+'%</b> '+esc(p.lbl); }).join(' · ');
     return '<div class="rpt-glance-item"><div class="rg-donut" style="background:conic-gradient('+grad+');">'
       +'<div class="rg-center"><div class="rg-val">'+pieces[0].pct+'%</div></div></div>'
@@ -1227,6 +1227,7 @@
   }
 
   function renderReports(){
+    if(!C||!C.bookings) return;   // data not ready yet — don't crash
     var rng=_dateRangeFor(A.period, A.customFrom, A.customTo);
     var prng=_prevRange(rng.from, rng.to);
     var rpt=computeReport(rng.from, rng.to, prng.from, prng.to);
