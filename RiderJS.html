@@ -112,6 +112,23 @@
     updateProgress();
   }
 
+  // Loads the term sections the form is built from. On failure SECTIONS stays empty,
+  // which (by design, see allTermsAccepted) blocks submission — so a failed load must
+  // never fail silently: show the error inline with a Retry that re-runs this same call.
+  function loadTerms() {
+    google.script.run
+      .withSuccessHandler(function (secs) { SECTIONS = secs || []; renderTerms(); })
+      .withFailureHandler(function () {
+        els.termsContainer.innerHTML = '<div class="card" style="text-align:center;color:var(--terra);">'
+          + 'Could not load terms.'
+          + '<div style="margin-top:12px;"><button id="termsRetryBtn" class="btn btn-ghost" style="border:1px solid var(--line-3);font-size:14px;">Retry</button></div>'
+          + '</div>';
+        var rb = $('termsRetryBtn');
+        if (rb) rb.addEventListener('click', loadTerms);
+      })
+      .getTermsSections();
+  }
+
   function toggleTerm(i) {
     accepted[i] = !accepted[i];
     var card = els.termsContainer.querySelector('section.term[data-idx="' + i + '"]');
@@ -528,10 +545,7 @@
     FIELDS.checkout.addEventListener('change', updatePrice);
 
     // load terms
-    google.script.run
-      .withSuccessHandler(function (secs) { SECTIONS = secs || []; renderTerms(); })
-      .withFailureHandler(function () { els.termsContainer.innerHTML = '<div class="card" style="text-align:center;color:var(--terra);">Could not load terms. Please refresh.</div>'; })
-      .getTermsSections();
+    loadTerms();
 
     // load cottages
     google.script.run

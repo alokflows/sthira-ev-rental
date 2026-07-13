@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <link rel="manifest" href="?mode=manifest&app=admin">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Yard Fleet">
@@ -52,7 +53,7 @@
       background:var(--topbar);backdrop-filter:blur(10px);border-bottom:1px solid var(--line-3);}
     @media(max-width:860px){.topbar{padding:18px 16px 14px;position:sticky;top:0;}}
     .topbar .day{font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;}
-    .topbar h1{font-family:var(--serif);font-weight:500;margin:2px 0 0;font-size:26px;line-height:1.05;}
+    .topbar h1{font-family:var(--serif);font-weight:500;margin:2px 0 0;font-size:26px;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .icon-btn{position:relative;width:42px;height:42px;border-radius:13px;border:1px solid var(--line-3);background:var(--card);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt-2);flex:none;}
     .icon-btn .ct{position:absolute;top:-5px;right:-5px;min-width:19px;height:19px;padding:0 5px;border-radius:10px;background:var(--terra-2);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid var(--card);}
     .scrollarea{padding:26px 34px 40px;overflow-y:auto;flex:1;}
@@ -157,7 +158,7 @@
     .x-btn{width:34px;height:34px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface);color:var(--muted-2);cursor:pointer;font-size:14px;flex:none;}
     .btn-lg{flex:1;padding:13px;border-radius:13px;border:none;background:var(--pine);color:#fff;font-weight:600;font-size:14.5px;cursor:pointer;}
     .btn-lg.danger{background:var(--terra-2);}
-    .btn-ghost-lg{flex:0 0 auto;padding:13px 20px;border-radius:13px;border:1px solid #DDD5C5;background:transparent;color:var(--muted);font-weight:600;font-size:14.5px;cursor:pointer;}
+    .btn-ghost-lg{flex:0 0 auto;padding:13px 20px;border-radius:13px;border:1px solid var(--line-3);background:transparent;color:var(--muted);font-weight:600;font-size:14.5px;cursor:pointer;}
     /* Booking-details footer: compact secondary actions left, one primary right — never a wall of fat buttons */
     .bk-foot{display:flex;align-items:center;gap:9px;flex-wrap:wrap;width:100%;}
     .bk-foot .sp{flex:1 1 auto;min-width:6px;}
@@ -176,7 +177,7 @@
     .filt-grid .fcol label{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);}
     .summary{background:var(--card-2);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:18px;}
     .summary .sr{display:flex;justify-content:space-between;font-size:14px;margin-bottom:7px;}
-    .summary .sr.total{font-size:15.5px;border-top:1px solid #E4DCCC;padding-top:9px;margin-bottom:0;}
+    .summary .sr.total{font-size:15.5px;border-top:1px solid var(--line-3);padding-top:9px;margin-bottom:0;}
     .summary .sr.total .amt{font-family:var(--serif);font-size:19px;font-weight:600;}
 
     /* gridforms */
@@ -201,13 +202,13 @@
     .pad-inner{width:100%;max-width:330px;text-align:center;}
     .pin-dots{display:flex;gap:15px;justify-content:center;margin-top:26px;}
     .pin-dots.err{animation:shShake .42s ease both;}
-    .pin-dots span{width:15px;height:15px;border-radius:50%;background:transparent;border:2px solid #CFC7B6;transition:all .15s;}
+    .pin-dots span{width:15px;height:15px;border-radius:50%;background:transparent;border:2px solid var(--line-3);transition:all .15s;}
     .pin-dots span.on{background:var(--pine);border-color:var(--pine);}
     .pin-dots.err span.on{background:var(--terra-2);border-color:var(--terra-2);}
     .pin-err{height:20px;margin-top:10px;font-size:13px;color:var(--terra-2);font-weight:600;}
     .keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-top:14px;}
     .key{height:62px;border-radius:18px;border:1px solid var(--line-3);background:var(--card);color:var(--ink);font-size:23px;font-weight:500;font-family:var(--serif);cursor:pointer;transition:background .12s,transform .08s;}
-    .key:active{transform:scale(.96);background:#F3EEE3;}
+    .key:active{transform:scale(.96);background:var(--paper-hi);}
     .key.aux{border:none;background:transparent;color:var(--faint);font-size:14px;font-weight:600;font-family:var(--ui);}
     .key.back{font-size:21px;color:var(--muted);}
     .bottomnav{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--card);border-top:1px solid var(--line-3);display:none;padding:8px 6px calc(8px + env(safe-area-inset-bottom));box-shadow:0 -4px 24px rgba(60,50,30,.06);}
@@ -283,7 +284,10 @@
         <div class="lb-head">Sthira Fleet<br>Management System</div>
         <p class="lb-sub">Sign in with your PIN to access the dispatch system and manage today's rentals.</p>
       </div>
-      <div class="lb-foot">Isha Yoga Center · Coimbatore</div>
+      <div class="lb-foot" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <span>Isha Yoga Center · Coimbatore</span>
+        <button id="installBtn" type="button" class="hidden" style="background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);color:#F4F0E8;border-radius:10px;padding:6px 12px;font-size:11.5px;font-weight:600;cursor:pointer;">Install app</button>
+      </div>
     </div>
     <div class="login-pad">
       <div class="pad-inner">
@@ -359,7 +363,7 @@
     <nav class="bottomnav">
       <button class="bn-btn on" data-view="overview"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg><span>Home</span></button>
       <button class="bn-btn" data-view="bookings"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="2.5"/><path d="M3.5 9h17M8 3v3M16 3v3"/></svg><span>Bookings</span></button>
-      <button class="bn-btn" data-view="fleet"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="17.5" r="2.6"/><circle cx="18.5" cy="17.5" r="2.6"/><path d="M8 17.5h8"/></svg><span>Fleet</span></button>
+      <button class="bn-btn" data-view="fleet"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="17.5" r="2.6"/><circle cx="18.5" cy="17.5" r="2.6"/><path d="M8 17.5h8M16 17.5l-3-9h-2.5"/></svg><span>Fleet</span></button>
       <button class="bn-btn" data-view="yard"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg><span>Yard</span></button>
       <button class="bn-btn" data-view="money"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 9.5h18"/></svg><span>Money</span></button>
       <button class="bn-btn" data-view="settings"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/></svg><span>Settings</span></button>
@@ -373,6 +377,28 @@
   <script>
     // Injected server-side: the deployed web-app URL (for the guest-form link).
     window.WEB_APP_URL = "<?= getWebAppUrl() ?>";
+
+    // Installable desk: capture the native prompt and offer a lightweight button
+    // (online-only — no service worker; installability + standalone display only).
+    (function(){
+      var deferredPrompt = null;
+      var btn = document.getElementById('installBtn');
+      window.addEventListener('beforeinstallprompt', function(ev){
+        ev.preventDefault();
+        deferredPrompt = ev;
+        if (btn) btn.classList.remove('hidden');
+      });
+      if (btn) btn.addEventListener('click', function(){
+        if (!deferredPrompt) return;
+        btn.classList.add('hidden');
+        deferredPrompt.prompt();
+        deferredPrompt = null;
+      });
+      window.addEventListener('appinstalled', function(){
+        if (btn) btn.classList.add('hidden');
+        deferredPrompt = null;
+      });
+    })();
   </script>
   <?!= include('SharedCalc'); ?>
   <?!= include('AdminJS'); ?>

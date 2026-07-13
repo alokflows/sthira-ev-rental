@@ -11,6 +11,9 @@ const DEFAULT_SETTINGS = {
   managerLabel:       'Manager',
   mapDriveFileId:     '',
   openingCashBalance: '0',
+  chargingPoints:     '',              // manager-configured list of named charging points the yard
+                                        // picks from when plugging a scooter in; stored as newline
+                                        // ("\n") delimited names — split + trim + drop blanks on read.
   // ── Email-on-allocation feature ──
   emailEnabled:       'no',           // 'yes' | 'no' — master switch for confirmation emails
   emailFromName:      'Sthira Rentals',
@@ -137,7 +140,8 @@ const MANAGER_ONLY_SETTINGS = {
   dayRate: 1, depositPerWeek: 1, lateFeeMode: 1, lateFeePerHour: 1, graceMinutes: 1,
   rentalStartTime: 1, rentalEndTime: 1, openingCashBalance: 1, managerLabel: 1,
   allowPastBookings: 1, allowDeleteBookings: 1, allowOperatorPastBookings: 1, allowOperatorCancelActive: 1, reportEmail: 1, reportCC: 1,
-  supViewAllBookings: 1, supViewMoney: 1, supRunBookings: 1, supDeleteBookings: 1
+  supViewAllBookings: 1, supViewMoney: 1, supRunBookings: 1, supDeleteBookings: 1,
+  chargingPoints: 1
 };
 
 function updateSetting(key, value, operatorName, token) {

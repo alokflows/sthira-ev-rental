@@ -194,12 +194,29 @@ function getOperatorMoney(token, bDataIn, hDataIn) {
   const today = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd');
   const baseName = function (n) { return String(n || '').replace(/\s*\(backdated\)\s*$/i, ''); };
 
-  // Refunds this operator actually PAID — from the ledger by Operator (so a standalone
-  // refund counts and attribution matches getDrawers/getAccountingSummary).
-  const _myRef = _ledgerRefunds().byOp[me] || { cash: 0, upi: 0 };
+  // Per-BOOKING refund map (not per-operator) — profit must attribute to the BOOKER who
+  // earned the rent + kept deductions, never to whichever operator happened to process the
+  // return/cancel and pay the refund out of their own drawer. Mirrors _ledgerRefunds' own
+  // type/account matching (Refund/cash, DepositRefund/upi debit rows), just keyed by
+  // BOOKING_ID instead of Operator, so the deposit-kept math below is exact per booking.
+  const _ledData = _ensureLedgerSheet().getDataRange().getValues();
+  const refundByBooking = {};
+  for (let i = 1; i < _ledData.length; i++) {
+    if (!_ledData[i][LC.TXN_ID]) continue;
+    if (String(_ledData[i][LC.DIR]) !== 'debit') continue;
+    const type = String(_ledData[i][LC.TYPE]);
+    if (type !== 'Refund' && type !== 'DepositRefund') continue;
+    const bId = String(_ledData[i][LC.BOOKING_ID] || '');
+    if (!bId) continue;
+    const acct = String(_ledData[i][LC.ACCOUNT]), amt = Number(_ledData[i][LC.AMOUNT]) || 0;
+    if (!refundByBooking[bId]) refundByBooking[bId] = { cash: 0, upi: 0 };
+    if (acct === 'cash') refundByBooking[bId].cash += amt;
+    else if (acct === 'upi') refundByBooking[bId].upi += amt;
+  }
+
   let cashIn = 0, upiIn = 0;
-  const cashRefund = _myRef.cash, upiRefund = _myRef.upi;
   let depHeldCash = 0, depHeldUPI = 0, todayCash = 0, todayUPI = 0;
+  let profitCash = 0, profitUPI = 0;
   for (let i = 1; i < bData.length; i++) {
     const row = bData[i];
     if (!row[BC.BOOKING_ID]) continue;
@@ -211,7 +228,22 @@ function getOperatorMoney(token, bDataIn, hDataIn) {
     const rc = Number(row[BC.RENT_CASH]) || 0, ru = Number(row[BC.RENT_UPI]) || 0;
     const dc = Number(row[BC.DEPOSIT_CASH]) || 0, du = Number(row[BC.DEPOSIT_UPI]) || 0;
     cashIn += rc + dc; upiIn += ru + du;
-    if (status === 'Active' || (status === 'Deleted' && !row[BC.ACTUAL_RETURN])) { depHeldCash += dc; depHeldUPI += du; }
+    // Booker-attributed profit, settled per booking (not lumped across the operator):
+    // the deposit is a liability while the scooter is still out (Active, or Deleted before
+    // ever coming back) — same condition as depHeldCash below — so only rent is earned so
+    // far. Once the booking is settled (Returned, Cancelled-with-refund, or Deleted after a
+    // return), whatever wasn't paid back out of THIS booking's collection is profit: rent is
+    // never refunded in the normal flow, so this reduces to "rent + (deposit − withheld)"
+    // exactly, and still can't go negative if an edge-case refund dips into the rent side too.
+    const held = status === 'Active' || (status === 'Deleted' && !row[BC.ACTUAL_RETURN]);
+    if (held) {
+      depHeldCash += dc; depHeldUPI += du;
+      profitCash  += rc; profitUPI  += ru;
+    } else {
+      const ref = refundByBooking[String(row[BC.BOOKING_ID])] || { cash: 0, upi: 0 };
+      profitCash += Math.max(0, rc + dc - ref.cash);
+      profitUPI  += Math.max(0, ru + du - ref.upi);
+    }
     const created = row[BC.CREATED_AT] ? Utilities.formatDate(new Date(row[BC.CREATED_AT]), 'Asia/Kolkata', 'yyyy-MM-dd') : '';
     if (created === today && (status === 'Active' || status === 'Returned')) { todayCash += rc + dc; todayUPI += ru + du; }
   }
@@ -228,7 +260,6 @@ function getOperatorMoney(token, bDataIn, hDataIn) {
     if (baseName(hData[i][HC.HANDED_BY]) !== me) continue;
     if (recipIsMgr(String(hData[i][HC.RECEIVED_BY] || ''))) givenToManager += Number(hData[i][HC.AMOUNT]) || 0;
   }
-  const profitCash = cashIn - depHeldCash - cashRefund, profitUPI = upiIn - depHeldUPI - upiRefund;
   return {
     todayCash: todayCash, todayUPI: todayUPI, todayTotal: todayCash + todayUPI,
     cashInHand: myBalance,
@@ -351,17 +382,26 @@ function addOperator(name, pin, role, token) {
   // The client may mint only Operator, Supervisor, or Yard — never an Admin/Manager
   // (the first manager from the setup wizard is the sole full-power account).
   const safeRole = (role === 'Supervisor' || role === 'Yard') ? role : 'Operator';
-  // Cash/drawers are attributed by operator NAME, so two active people with the same
-  // name would silently merge into one drawer. Reject a duplicate active name.
   const nm = String(name).trim();
-  if (_getOperatorsData().some(o => o.active && o.name.toLowerCase() === nm.toLowerCase())) {
-    throw new Error('An operator named "' + nm + '" already exists — pick a distinct name (cash is tracked per name).');
-  }
   const hash = _hashPin(clean);
-  if (_getOperatorsData().some(o => o.active && o.pin === hash)) throw new Error('That PIN is already in use. Choose another.');
-  const id = _createOperator(nm, clean, safeRole);
-  _bumpDataVersion();
-  return { success: true, operatorId: id };
+  // Serialize the duplicate-name/PIN check + id high-water-mark + append under the script
+  // lock so two concurrent adds can't both pass the checks and mint the same OP id.
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+    // Cash/drawers are attributed by operator NAME, so two active people with the same
+    // name would silently merge into one drawer. Reject a duplicate active name.
+    if (_getOperatorsData().some(o => o.active && o.name.toLowerCase() === nm.toLowerCase())) {
+      throw new Error('An operator named "' + nm + '" already exists — pick a distinct name (cash is tracked per name).');
+    }
+    if (_getOperatorsData().some(o => o.active && o.pin === hash)) throw new Error('That PIN is already in use. Choose another.');
+    const id = _createOperator(nm, clean, safeRole);
+    _bumpDataVersion();
+    return { success: true, operatorId: id };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Manager changes an existing user between Operator, Supervisor, and Yard only. Never

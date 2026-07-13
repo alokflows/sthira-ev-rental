@@ -34,35 +34,44 @@ function _getVehiclesData() {
 // rider form gets it on its existing boot round-trip — no extra server call.
 function getPublicAvailableCount() {
   return _getVehiclesData().filter(function (v) {
-    return v.status === 'Available' && v.type !== 'Staff';
+    return (v.status === 'Available' || v.status === 'Charging') && v.type !== 'Staff';
   }).length;
 }
 
 function addVehicle(label, vehicleType, notes, token) {
   requireAdmin(token);
   const sheet = _getVehiclesSheet();
-  const existing = _getVehiclesData();
   const cleanLabel = String(label || '').trim();
   if (!cleanLabel) throw new Error('Enter a scooter number / label.');
-  // A scooter number must be unique — reject duplicates (case-insensitive).
-  // This is the server-side guard; the desk also checks before sending.
-  if (existing.some(v => String(v.label).trim().toLowerCase() === cleanLabel.toLowerCase())) {
-    throw new Error('A scooter labelled “' + cleanLabel + '” already exists.');
-  }
-  // High-water mark, not a row count: scan EV<number> ids and take max suffix + 1,
-  // so a hard deleteVehicle can never make the next id reuse an existing one.
-  let maxNum = 0;
-  existing.forEach(function (v) {
-    const m = /^EV(\d+)$/.exec(String(v.vehicleId));
-    if (m) { const n = parseInt(m[1], 10); if (!isNaN(n) && n > maxNum) maxNum = n; }
-  });
-  const nextNum = maxNum + 1;
-  const id = 'EV' + String(nextNum).padStart(3, '0');
   const type = vehicleType === 'Staff' ? 'Staff' : 'Rental';
   const initialStatus = type === 'Staff' ? 'Staff' : 'Available';
-  sheet.appendRow([id, cleanLabel, initialStatus, type, notes || '', new Date()]);
-  _bumpDataVersion();
-  return { success: true, vehicleId: id };
+  // Serialize the duplicate-check + id high-water-mark + append under the script lock so
+  // two concurrent adds can't both read the same max and mint the same EV id.
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+    const existing = _getVehiclesData();
+    // A scooter number must be unique — reject duplicates (case-insensitive).
+    // This is the server-side guard; the desk also checks before sending.
+    if (existing.some(v => String(v.label).trim().toLowerCase() === cleanLabel.toLowerCase())) {
+      throw new Error('A scooter labelled “' + cleanLabel + '” already exists.');
+    }
+    // High-water mark, not a row count: scan EV<number> ids and take max suffix + 1,
+    // so a hard deleteVehicle can never make the next id reuse an existing one.
+    let maxNum = 0;
+    existing.forEach(function (v) {
+      const m = /^EV(\d+)$/.exec(String(v.vehicleId));
+      if (m) { const n = parseInt(m[1], 10); if (!isNaN(n) && n > maxNum) maxNum = n; }
+    });
+    const nextNum = maxNum + 1;
+    const id = 'EV' + String(nextNum).padStart(3, '0');
+    sheet.appendRow([id, cleanLabel, initialStatus, type, notes || '', new Date()]);
+    _bumpDataVersion();
+    return { success: true, vehicleId: id };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function updateVehicle(vehicleId, updates, token) {

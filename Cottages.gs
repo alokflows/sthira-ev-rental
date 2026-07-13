@@ -38,19 +38,36 @@ function addCottage(name, token) {
   const clean = String(name || '').trim();
   if (!clean) throw new Error('Cottage name is required.');
   const sheet = _getCottagesSheet();
-  // Reactivate if it already exists (case-insensitive)
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][1]).toLowerCase() === clean.toLowerCase()) {
-      sheet.getRange(i + 1, 3).setValue(true);
-      _bumpDataVersion();
-      return { success: true, cottageId: String(data[i][0]) };
+  // Serialize the reactivate-check + id high-water-mark + append under the script lock so
+  // two concurrent adds can't both read the same max and mint the same CT id.
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+    // Reactivate if it already exists (case-insensitive)
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][1]).toLowerCase() === clean.toLowerCase()) {
+        sheet.getRange(i + 1, 3).setValue(true);
+        _bumpDataVersion();
+        return { success: true, cottageId: String(data[i][0]) };
+      }
     }
+    // High-water mark, not a row count: scan CT<number> ids and take max suffix + 1, so a
+    // deactivated/reactivated or otherwise removed row can never make the next id reuse an
+    // existing one (mirrors addVehicle's EV logic — was 'CT' + data.length, which reused ids).
+    let maxNum = 0;
+    for (let i = 1; i < data.length; i++) {
+      const m = /^CT(\d+)$/.exec(String(data[i][0]));
+      if (m) { const n = parseInt(m[1], 10); if (!isNaN(n) && n > maxNum) maxNum = n; }
+    }
+    const id = 'CT' + String(maxNum + 1).padStart(3, '0');
+    sheet.appendRow([id, clean, true]);
+    _bumpDataVersion();
+    return { success: true, cottageId: id };
+  } finally {
+    lock.releaseLock();
   }
-  const id = 'CT' + String(data.length).padStart(3, '0');
-  sheet.appendRow([id, clean, true]);
-  _bumpDataVersion();
-  return { success: true, cottageId: id };
 }
 
 function deactivateCottage(cottageId, token) {

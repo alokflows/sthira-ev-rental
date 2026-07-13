@@ -247,7 +247,22 @@ function doGet(e) {
 
   // Serve PWA manifest as JSON for ?mode=manifest
   if (mode === 'manifest') {
-    const manifest = {
+    // Admin/Yard desk gets its own manifest (?mode=manifest&app=admin) so it installs
+    // as a separate home-screen app that launches straight into the desk, not the guest form.
+    const isAdminApp = e && e.parameter && e.parameter.app === 'admin';
+    const manifest = isAdminApp ? {
+      name: 'Sthira Desk',
+      short_name: 'Sthira',
+      description: 'Admin & Yard desk for the Sthira electric two-wheeler rental at Isha Yoga Center',
+      start_url: ScriptApp.getService().getUrl(),
+      display: 'standalone',
+      background_color: '#EFEAE0',
+      theme_color: '#2F5D50',
+      icons: [
+        { src: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="%2322332C"/><circle cx="12" cy="12" r="7.2" fill="none" stroke="%23F4F0E8" stroke-width="1.4"/><path d="M12 4.8a7.2 7.2 0 0 0 0 14.4" fill="none" stroke="%23F4F0E8" stroke-width="1.4"/><circle cx="12" cy="12" r="1.8" fill="%23F4F0E8"/></svg>', sizes: '192x192', type: 'image/svg+xml', purpose: 'any maskable' },
+        { src: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="%2322332C"/><circle cx="12" cy="12" r="7.2" fill="none" stroke="%23F4F0E8" stroke-width="1.4"/><path d="M12 4.8a7.2 7.2 0 0 0 0 14.4" fill="none" stroke="%23F4F0E8" stroke-width="1.4"/><circle cx="12" cy="12" r="1.8" fill="%23F4F0E8"/></svg>', sizes: '512x512', type: 'image/svg+xml' }
+      ]
+    } : {
       name: 'Sthira',
       short_name: 'Sthira',
       description: 'Electric two-wheeler rental at Isha Yoga Center',

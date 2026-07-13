@@ -47,7 +47,18 @@ function processReturn(bookingId, returnData, token) {
   // end-of-day (e.g. 21:00 IST), never misread as midnight (which inflated late fees).
   const coYmd = _ymd(booking[BC.CHECK_OUT]);
   let checkOutDate = coYmd ? _istDeadlineUtc(coYmd, endTime) : null;
-  const actualReturn  = returnData.actualReturn ? new Date(returnData.actualReturn) : new Date();
+  let actualReturn = returnData.actualReturn ? new Date(returnData.actualReturn) : new Date();
+  // Never trust a client-sent timestamp unbounded: an invalid date or one in the future
+  // (clock skew, a typo, or a malicious payload) gets clamped to now. This does NOT block
+  // an earlier/backdated timestamp — that's a pricing-policy call the owner has reserved.
+  if (!(actualReturn instanceof Date) || isNaN(actualReturn) || actualReturn > new Date()) actualReturn = new Date();
+  // True server processing time (distinct from actualReturn, which the operator can set
+  // to any earlier moment). Used only to FLAG — never block — a backdated return: one
+  // recorded as on-time (actualReturn <= deadline) but actually processed after the
+  // deadline, i.e. a late fee that was dodged by claiming an earlier return. Surfaced to
+  // a manager via runSelfAudit (Ledger.gs); does not change any amount/account/direction.
+  const recordedAt = new Date();
+  const backdatedFlag = !!returnData.actualReturn && checkOutDate && recordedAt > checkOutDate && actualReturn <= checkOutDate;
   const depositAmount = Number(booking[BC.DEPOSIT_AMOUNT]) || 0;
 
   // ── Late fee calculation ──────────────────────────────────────────────────
@@ -91,16 +102,24 @@ function processReturn(bookingId, returnData, token) {
   let deductionTotal = 0;
 
   if (returnData.deductions && returnData.deductions.length > 0) {
+    // Build the rows first, then write them in ONE batched range — instead of one
+    // appendRow per deduction — so we're not doing N Sheets round-trips while holding
+    // the script lock. Same column order/values per row as before.
+    const deductRows = [];
     returnData.deductions.forEach((d, idx) => {
       const amt = Math.max(0, Number(d.amount) || 0);
       if (amt === 0) return;
       deductionTotal += amt;
       const deductId = 'DED-' + bookingId + '-' + String(idx + 1).padStart(2, '0');
-      deductSheet.appendRow([
+      deductRows.push([
         deductId, bookingId, amt, d.reason || 'Damage/Loss',
         returnData.operatorName || '', new Date()
       ]);
     });
+    if (deductRows.length > 0) {
+      const startRow = deductSheet.getLastRow() + 1;
+      deductSheet.getRange(startRow, 1, deductRows.length, deductRows[0].length).setValues(deductRows);
+    }
   }
 
   // ── Refund calculation ────────────────────────────────────────────────────
@@ -169,11 +188,19 @@ function processReturn(bookingId, returnData, token) {
   const withheld       = Math.max(0, depositAmount - refundAmount);
   const postedLateFee  = Math.min(lateFee, withheld);
   const postedDeduction = Math.min(deductionTotal, withheld - postedLateFee);
+  // Machine-readable audit marker on the refund rows only (they're the payoff of the
+  // evasion — a bigger refund because the late fee never got charged). Empty string when
+  // not flagged, matching the prior no-note behavior; note is purely informational and
+  // never affects amount/account/direction.
+  const backdatedNote = backdatedFlag
+    ? 'FLAG:backdated claimed ' + Utilities.formatDate(actualReturn, 'Asia/Kolkata', 'dd MMM HH:mm') +
+      ' recorded ' + Utilities.formatDate(recordedAt, 'Asia/Kolkata', 'dd MMM HH:mm')
+    : '';
   _appendLedgerRows([
     { type: 'LateFeeIn',     direction: 'credit', amount: postedLateFee,   account: 'income', operator: opName, bookingId: bookingId },
     { type: 'DeductionIn',   direction: 'credit', amount: postedDeduction, account: 'income', operator: opName, bookingId: bookingId },
-    { type: 'Refund',        direction: 'debit',  amount: refundCash,     account: 'cash',   operator: opName, bookingId: bookingId },
-    { type: 'DepositRefund', direction: 'debit',  amount: refundUPI,      account: 'upi',    operator: opName, bookingId: bookingId }
+    { type: 'Refund',        direction: 'debit',  amount: refundCash,     account: 'cash',   operator: opName, bookingId: bookingId, note: backdatedNote },
+    { type: 'DepositRefund', direction: 'debit',  amount: refundUPI,      account: 'upi',    operator: opName, bookingId: bookingId, note: backdatedNote }
   ]);
 
   _bumpDataVersion();

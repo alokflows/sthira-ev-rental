@@ -49,6 +49,22 @@
   function endMut(){ if(A.inflight>0) A.inflight--; }
   // Animate views only on real navigation / first paint — never on a silent background sync.
   function animCls(){ return A.silent ? '' : 'anim-fade'; }
+  // Vehicle-card settle-in: renderFleet/renderYard tag ONLY the card whose id
+  // matches A._settleId with '.vc-settle' (a brief fade+scale-in), then clear the
+  // flag the instant it's consumed — so the tag never survives past that one
+  // synchronous render and a later pulse/silentRefresh repaint never replays it.
+  function prefersReducedMotion(){ try{ return window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){ return false; } }
+  function settleCls(vehicleId){ return (!prefersReducedMotion() && A._settleId!=null && A._settleId===vehicleId) ? ' vc-settle' : ''; }
+  // Play a fade-out on the acted-on card (found by data-vid inside containerId)
+  // before running afterFn — used so delete/remove doesn't just teleport the card
+  // away. Falls back to running afterFn immediately if the card isn't on screen
+  // (e.g. filtered out) or the user prefers reduced motion.
+  function animateCardLeave(containerId, vehicleId, afterFn){
+    var host=$(containerId), el=host && host.querySelector('[data-vid="'+vehicleId+'"]');
+    if(!el || prefersReducedMotion()){ afterFn(); return; }
+    el.classList.add('vc-leaving');
+    setTimeout(afterFn, 220);
+  }
   // Session persistence: survives closing the tab/app, keeping the user logged in
   // until they explicitly log out, making it feel like a native app.
   function saveSession(){ try{ localStorage.setItem('sthira_session', JSON.stringify({ token:A.token, operator:A.operator, role:A.role })); }catch(e){} }
@@ -419,6 +435,12 @@
     if(st==='staff') return { label:'Staff', bg:'var(--surface-2)', fg:'#3F5E82' };
     return { label:st, bg:'#eee', fg:'#555' };
   }
+  // Manager-configured charging points (Settings → Charging points), stored as a single
+  // newline-delimited Settings value (see Config.gs DEFAULT_SETTINGS.chargingPoints).
+  // Split + trim + drop blanks on every read — never store the array itself.
+  function chargingPointsList(){
+    return String((C.settings&&C.settings.chargingPoints)||'').split('\n').map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+  }
   // Today's worklist, grouped: what the desk acts on today. Returns done today close the loop.
   function bkTodayGroups(){
     var t=todayStr();
@@ -569,7 +591,7 @@
       var locSuffix=v.location?' · '+esc(v.location):'';
       var noteText='';
       if(v.status==='Out' && v.activeBooking) noteText = '<span data-action="veh-occupant" data-id="'+esc(v.vehicleId)+'" style="cursor:pointer;color:var(--pine);font-weight:600;text-decoration:underline;text-underline-offset:2px;">With '+esc(v.activeBooking.riderName)+' →</span>';
-      else if(v.status==='Charging') noteText = 'On charge'+locSuffix;
+      else if(v.status==='Charging') noteText = v.location ? 'Charging · '+esc(v.location) : 'Charging';
       else if(v.status==='Maintenance') noteText = 'In maintenance'+locSuffix;
       else noteText = 'Available'+locSuffix; // Ignores messy notes column completely
       
@@ -583,7 +605,7 @@
         btns+='<button class="veh-ib" data-action="yard-location" data-id="'+esc(v.vehicleId)+'" title="Set location" style="'+btnStyle+'">'+IB_PIN+'</button>';
         btns+='<button class="veh-ib" data-action="veh-toggle" data-id="'+esc(v.vehicleId)+'" data-status="'+nextChargeStatus+'" title="'+(v.status==='Charging'?'Charged — mark available':'Plug in to charge')+'" style="'+btnStyle+'">'+(v.status==='Charging'?IB_C:IB_L)+'</button>';
       }
-      return '<div style="background:var(--card);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:12px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">'
+      return '<div class="vehicle-card'+settleCls(v.vehicleId)+'" data-vid="'+esc(v.vehicleId)+'" style="background:var(--card);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:12px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">'
         +'<div data-action="fleet-details" data-id="'+esc(v.vehicleId)+'" style="cursor:pointer;">'
         +'<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">'
         +'<div style="min-width:0;">'
@@ -594,15 +616,18 @@
         +'</div>'
         +'<div style="font-size:13px;color:var(--txt-1);font-weight:500;margin-top:12px;">'+noteText+'</div>'
         +'</div>'
-        +(btns?'<div style="display:flex;align-items:center;justify-content:flex-start;gap:10px;">'+btns+'</div>':'')
+        +(btns?'<div style="display:flex;align-items:center;justify-content:center;gap:10px;">'+btns+'</div>':'')
         +'</div>';
     }).join('');
+    A._settleId=null;   // consumed — a later pulse/silentRefresh repaint won't re-animate it
     var sortIcon = A.fleetSortAlpha ? '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>' : '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h9M4 12h9M4 18h9M16 6v12M16 18l3-3M16 18l-3-3"/></svg>';
     var chipDefs=[['Available',avail],['Charging',charge],['Maintenance',maint],['Out',out]];
     var chipRow=chipDefs.map(function(cd){
       return '<button class="chip'+(A.fleetFilter===cd[0]?' on':'')+'" data-action="fleet-chip" data-status="'+cd[0]+'">'+cd[0]+'<span class="cct">'+cd[1]+'</span></button>';
     }).join('');
-    $('view-fleet').innerHTML='<div class="'+animCls()+'"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px;">'
+    $('view-fleet').innerHTML='<div class="'+animCls()+'">'
+      +'<div style="font-size:15px;color:var(--muted-2);margin-top:-4px;margin-bottom:16px;">'+rawVs.length+' scooters</div>'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px;">'
       +'<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;flex:1;scrollbar-width:none;">'+chipRow+'</div>'
       +'<div style="display:flex;gap:8px;">'
       +'<button class="veh-ib" data-action="fleet-sort" title="Toggle sorting" style="background:transparent;border-color:var(--line-3);">'+sortIcon+'</button>'
@@ -673,7 +698,7 @@
   }
   function yardVehicleCard(v){
     var sm=statusMeta(v.status);
-    var locLine=v.location?esc(v.location):(v.status==='Out'?'Out on rent':'—');
+    var locLine=v.status==='Charging'?(v.location?'Charging at '+esc(v.location):'Charging'):(v.location?esc(v.location):(v.status==='Out'?'Out on rent':'—'));
     var IB_L='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>';
     var IB_W='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5 5L3 18l3 3 6.7-6.7a4 4 0 0 0 5-5l-2.4 2.4-2.1-2.1z"/></svg>';
     var IB_C='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
@@ -688,7 +713,7 @@
     } else if(v.activeBooking) {
       btns+='<button class="btn" data-action="yard-out-details" data-id="'+esc(v.activeBooking.bookingId)+'" style="flex:1;background:var(--pine-tint);color:var(--pine);border:none;font-weight:600;border-radius:12px;padding:8px;font-size:13.5px;">Guest details</button>';
     }
-    return '<div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px;">'
+    return '<div class="vehicle-card'+settleCls(v.vehicleId)+'" data-vid="'+esc(v.vehicleId)+'" style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px;">'
       +'<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;"><span style="font-family:var(--mono);font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v.label)+'</span><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';flex:none;">'+sm.label+'</span></div>'
       +'<div style="font-size:12px;color:var(--muted-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+locLine+'</div>'
       +(btns?'<div style="display:flex;gap:6px;justify-content:center;">'+btns+'</div>':'')
@@ -730,6 +755,7 @@
       return la < lb ? -1 : (la > lb ? 1 : 0);
     });
     var gridHtml = gridVehicles.length ? gridVehicles.map(yardVehicleCard).join('') : '<div class="empty" style="grid-column:1/-1;">No scooters here.</div>';
+    A._settleId=null;   // consumed — a later pulse/silentRefresh repaint won't re-animate it
 
     var due=bkDueToday();
     var dueHtml = due.length ? due.map(function(b){
@@ -759,10 +785,19 @@
       flash(errMsg(e), true); silentRefresh();
     });
   }
-  function yardVehToggle(id, status){
+  function yardVehToggle(id, status, point){
     beginMut();
-    (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===id) v.status=status; }); renderYard(); flash('Scooter updated.');
-    call('setVehicleStatus',[id, status, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
+    var wasCharging=false;
+    (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===id){
+      wasCharging=(v.status==='Charging'); v.status=status;
+      if(status==='Charging' && point) v.location=point;
+      else if(status!=='Charging' && wasCharging) v.location='';
+    } });
+    A._settleId=id; renderYard(); flash('Scooter updated.');
+    var p=call('setVehicleStatus',[id, status, A.token]);
+    if(status==='Charging' && point) p=p.then(function(){ return call('setVehicleLocation',[id, point, A.token]); });
+    else if(status!=='Charging' && wasCharging) p=p.then(function(){ return call('setVehicleLocation',[id, '', A.token]); });
+    p.then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
   }
   function openYardLocation(id){
     var v=(C.vehicles||[]).filter(function(x){return x.vehicleId===id;})[0];
@@ -782,6 +817,28 @@
     closeModal(); rerenderCurrent();
     flash('Location updated.');
     return call('setVehicleLocation',[id, chosen, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
+  }
+
+  // Plug-in-to-charge REQUIRES picking a configured charging point (Settings → Charging
+  // points). 'kind' is 'fleet' or 'yard' so submitChargePoint routes to the right toggle
+  // (vehToggle / yardVehToggle) — both already carry the A._settleId settle-animation gate.
+  function openChargePicker(kind, id){
+    var v=(C.vehicles||[]).filter(function(x){return x.vehicleId===id;})[0];
+    if(!v){ flash('Vehicle not found — refreshing.', true); silentRefresh(); return; }
+    var pts=chargingPointsList();
+    if(!pts.length){ flash('No charging points set up yet — ask a manager to add them in Settings.', true); return; }
+    window._chargeId=id; window._chargeKind=kind;
+    var body='<div style="display:flex;gap:9px;flex-wrap:wrap;">'
+      +pts.map(function(p){ return '<button class="chip" data-action="charge-pt-pick" data-pt="'+esc(p)+'">'+esc(p)+'</button>'; }).join('')
+      +'</div>';
+    openModal('Where is it charging?', v.label, body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button>');
+  }
+  function submitChargePoint(pt){
+    var id=window._chargeId, kind=window._chargeKind;
+    if(!pt){ flash('Pick a charging point.', true); return; }
+    closeModal();
+    if(kind==='yard') yardVehToggle(id, 'Charging', pt);
+    else vehToggle(id, 'Charging', pt);
   }
 
   // ════════ MONEY (bank-like: drawers + passbook ledger) ════════
@@ -995,6 +1052,11 @@
         +'<button class="btn btn-primary" data-action="save-pricing" style="margin-top:16px;">Save pricing &amp; timings</button>');
     var gCottages=card('Cottages / accommodations','These populate the guest form dropdown.',
           cotRows+'<div style="display:flex;gap:8px;margin-top:14px;"><input id="cot-newname" class="field" placeholder="Add a cottage…"><button class="btn btn-primary" data-action="cot-add" style="padding:12px 18px;">Add</button></div>');
+    var cpList=chargingPointsList();
+    var cpRows=cpList.map(function(p,i){ return '<div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1px solid var(--hair);"><div style="flex:1;font-weight:600;font-size:14.5px;">'+esc(p)+'</div><button class="link-btn" data-action="cp-remove" data-idx="'+i+'" style="color:var(--terra);">Remove</button></div>'; }).join('');
+    var gCharging=card('Charging points','Where scooters can charge. The yard must pick one of these when plugging a scooter in.',
+          (cpRows||'<div class="empty" style="padding:8px 0;">No charging points yet — add one below.</div>')
+        +'<div style="display:flex;gap:8px;margin-top:14px;"><input id="cp-newname" class="field" placeholder="Add a charging point…"><button class="btn btn-primary" data-action="cp-add" style="padding:12px 18px;">Add</button></div>');
     var gOperatorsList=card('Operators &amp; access','Each operator signs in with their own 6-digit PIN — it identifies who is at the desk. The manager is shown at the top.',
           opRows+'<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center;"><input id="op-newname" class="field" placeholder="New operator name…" style="flex:1;min-width:140px;"><input id="op-newpin" class="field" type="text" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" style="width:120px;"><select id="op-newrole" class="field" style="width:138px;"><option value="Operator">Operator</option><option value="Supervisor">Supervisor</option><option value="Yard">Yard</option></select><button class="btn btn-primary" data-action="op-add" style="padding:12px 18px;">Add</button></div>');
     var gAccess=card('Desk access','Manager label shown across the desk.',
@@ -1036,7 +1098,7 @@
         +(isMgr()?'<button class="btn" data-action="open-sheet" style="margin-top:14px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Open data spreadsheet ↗</button>':''));
 
     // Guest-form group = everything riders touch (managers edit; operators just get the link).
-    var gGuestForm=(isMgr()?gPricing+gCottages+gEmail:'')+gLink;
+    var gGuestForm=(isMgr()?gPricing+gCottages+gCharging+gEmail:'')+gLink;
     // Operators group (manager-only): operators list full-width, then access + powers
     // side by side, then the Supervisor-powers grant card full-width beneath.
     var gOperators=gOperatorsList+'<div class="set-pair">'+gAccess+gPowers+'</div>'+gSupPowers;
@@ -1601,16 +1663,17 @@
   function submitAddVehicle(){
     var label=val('av-label'); if(!label){ flash('Enter a scooter number.', true); return; }
     if((C.vehicles||[]).some(function(v){ return String(v.label||'').trim().toLowerCase()===label.toLowerCase(); })){ flash('A scooter “'+label+'” already exists.', true); return; }
-    var type=val('av-type'), notes=val('av-notes');
+    var type=val('av-type'), notes=val('av-notes'), tempId='temp_'+Date.now();
     closeModal(); beginMut();
-    (C.vehicles=C.vehicles||[]).push({ vehicleId:'temp_'+Date.now(), label:label, type:type, notes:notes, status:'Available', location:'' });
-    renderFleet(); flash(label+' added to the fleet.');
+    (C.vehicles=C.vehicles||[]).push({ vehicleId:tempId, label:label, type:type, notes:notes, status:'Available', location:'' });
+    A._settleId=tempId; renderFleet(); flash(label+' added to the fleet.');
     call('addVehicle',[label, type, notes, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
   }
 
   // ════════ BOOKING DETAILS (overlay — instant, from cache) ════════
   function detailRow(label, value){ if(value===''||value==null) return ''; return '<div style="display:flex;justify-content:space-between;gap:18px;padding:9px 0;border-top:1px solid var(--line);"><span style="color:var(--muted-2);font-size:13px;">'+esc(label)+'</span><span style="font-weight:600;font-size:13.5px;text-align:right;max-width:62%;word-break:break-word;">'+esc(value)+'</span></div>'; }
   function detailRowRaw(label, rawHTML){ if(!rawHTML) return ''; return '<div style="display:flex;justify-content:space-between;gap:18px;padding:9px 0;border-top:1px solid var(--line);"><span style="color:var(--muted-2);font-size:13px;">'+esc(label)+'</span><span style="font-weight:600;font-size:13.5px;text-align:right;">'+rawHTML+'</span></div>'; }
+  function phoneLink(num){ return num ? '<a href="tel:'+esc(num)+'" style="color:var(--pine);text-decoration:none;display:inline-flex;align-items:center;gap:6px;">'+esc(num)+'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></a>' : ''; }
 
   function openFleetVehicleDetails(vehicleId){
     var v=(C.vehicles||[]).filter(function(x){return x.vehicleId===vehicleId;})[0];
@@ -1624,7 +1687,7 @@
       +'<button class="btn-lg" data-action="fleet-veh-toggle" data-id="'+esc(v.vehicleId)+'" data-status="'+nextMaint+'" style="display:flex;align-items:center;justify-content:center;gap:8px;">'
       +(v.status==='Maintenance'?IB_C+' Mark Available':IB_W+' Send to Maintenance')+'</button>'
       +'<button class="btn-lg" data-action="veh-edit" data-id="'+esc(v.vehicleId)+'" style="display:flex;align-items:center;justify-content:center;gap:8px;background:var(--card-alt);border:1px solid var(--line);color:var(--txt-1);">'+IB_E+' Edit Scooter</button>'
-      +'<button class="btn-lg danger" data-action="veh-delete" data-id="'+esc(v.vehicleId)+'" style="display:flex;align-items:center;justify-content:center;gap:8px;background:#FEF2F2;border:1px solid #FCA5A5;color:var(--terra);">'+IB_T+' Delete Scooter</button>'
+      +'<button class="btn-lg danger" data-action="veh-delete" data-id="'+esc(v.vehicleId)+'" style="display:flex;align-items:center;justify-content:center;gap:8px;background:var(--terra-tint);border:1px solid var(--terra);color:var(--terra);">'+IB_T+' Delete Scooter</button>'
       +'</div>';
     openModal('Manage '+esc(v.label), 'Deeper settings', body, '<button class="btn-ghost-lg" data-action="modal-close" style="width:100%;">Close</button>');
   }
@@ -1632,7 +1695,7 @@
   function openYardBookingDetails(bookingId){
     var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
     if(!b){ flash('Booking not found.', true); return; }
-    var phoneHTML = '<a href="tel:'+esc(b.mobile)+'" style="color:var(--pine);text-decoration:none;display:inline-flex;align-items:center;gap:6px;">'+esc(b.mobile)+'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></a>';
+    var phoneHTML = phoneLink(b.mobile);
     var body='<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;"><div class="av" style="width:46px;height:46px;font-size:16px;">'+esc(initials(b.riderName))+'</div><div style="flex:1;min-width:0;"><div style="font-weight:700;font-size:17px;">'+esc(b.riderName)+'</div><div style="font-size:12.5px;color:var(--muted-2);font-family:var(--mono);">'+esc(b.bookingId)+'</div></div></div>'
       +detailSection('Guest',[ detailRow('Cottage / stay', b.cottageName), detailRowRaw('Mobile', phoneHTML) ])
       +detailSection('Rental',[ detailRow('Scooter', b.vehicleLabel), detailRow('Check-in', b.checkIn), detailRow('Return by', b.checkOut), detailRow('Duration', b.days?b.days+' day(s)':''), detailRow('Booked on', b.createdAt) ]);
@@ -1646,7 +1709,7 @@
     var hasCash=(b.rentCash+b.depositCash)>0, hasUPI=(b.rentUPI+b.depositUPI)>0;
     var payMode=(hasCash&&hasUPI)?'Cash + UPI':(hasUPI?'UPI':(hasCash?'Cash':''));
     var body='<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;"><div class="av" style="width:46px;height:46px;font-size:16px;">'+esc(initials(b.riderName))+'</div><div style="flex:1;min-width:0;"><div style="font-weight:700;font-size:17px;">'+esc(b.riderName)+'</div><div style="font-size:12.5px;color:var(--muted-2);font-family:var(--mono);">'+esc(b.bookingId)+'</div></div><span class="statuspill" style="background:'+sm.bg+';color:'+sm.fg+';">'+sm.label+'</span></div>'
-      +detailSection('Guest',[ detailRow('Mobile', b.mobile), detailRow('Alt. mobile', b.altMobile), detailRow('Email', b.email), detailRow('Driving licence', b.dlNumber), detailRow('Cottage / stay', b.cottageName) ])
+      +detailSection('Guest',[ detailRowRaw('Mobile', phoneLink(b.mobile)), detailRowRaw('Alt. mobile', phoneLink(b.altMobile)), detailRow('Email', b.email), detailRow('Driving licence', b.dlNumber), detailRow('Cottage / stay', b.cottageName) ])
       +detailSection('Rental',[ detailRow('Scooter', b.vehicleLabel), detailRow('Check-in', b.checkIn), detailRow('Return by', b.checkOut), detailRow('Duration', b.days?b.days+' day(s)':''), detailRow('Booked on', b.createdAt) ])
       +detailSection('Money',[ detailRow('Rent', inr(b.rentAmount)), detailRow('Deposit (held)', inr(b.depositAmount)), detailRow('Total', inr(b.totalAmount)), detailRow('Paid by', (b.status!=='Pending'?payMode:'')), detailRow('Late fee', b.lateFee?inr(b.lateFee):''), detailRow('Deductions', b.deductionTotal?inr(b.deductionTotal):''), detailRow('Refunded', b.refundTotal?inr(b.refundTotal):'') ])
       +detailSection('Handled by',[ detailRow('Booked by', b.operatorBooked), detailRow('Terms accepted', b.consentAt), detailRow('Returned by', b.operatorReturned), detailRow('Returned at', b.actualReturn), detailRow('Notes', b.returnNotes) ]);
@@ -1756,16 +1819,31 @@
   function submitMapDrive(){ var link=val('md-link'); if(!link){ flash('Paste a Drive link or file ID.', true); return; } flash('Setting map…'); return call('useMapFromDrive',[link, A.token]).then(function(){ closeModal(); flash('Map image set ✓'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); }); }
 
   // ════════ OPTIMISTIC LIGHT MUTATIONS ════════
-  function vehToggle(id, status){
+  function vehToggle(id, status, point){
     beginMut();
-    (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===id) v.status=status; }); renderFleet(); flash('Scooter updated.');
-    call('setVehicleStatus',[id, status, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
+    var wasCharging=false;
+    (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===id){
+      wasCharging=(v.status==='Charging'); v.status=status;
+      if(status==='Charging' && point) v.location=point;
+      else if(status!=='Charging' && wasCharging) v.location='';
+    } });
+    A._settleId=id; renderFleet(); flash('Scooter updated.');
+    var p=call('setVehicleStatus',[id, status, A.token]);
+    if(status==='Charging' && point) p=p.then(function(){ return call('setVehicleLocation',[id, point, A.token]); });
+    else if(status!=='Charging' && wasCharging) p=p.then(function(){ return call('setVehicleLocation',[id, '', A.token]); });
+    p.then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
   }
   function vehDelete(id){
     if(!confirm('Are you sure you want to remove this vehicle?')) return;
-    beginMut();
-    C.vehicles=(C.vehicles||[]).filter(function(v){ return v.vehicleId!==id; }); renderFleet(); flash('Scooter removed.');
-    call('deleteVehicle',[id, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
+    // Let the card fade out on screen first, then do the actual optimistic
+    // removal + server call — a full innerHTML rebuild can't animate a node
+    // that's already gone, so the paint is deferred behind the animation only
+    // (the mutation/server-call timing itself is unchanged once triggered).
+    animateCardLeave('view-fleet', id, function(){
+      beginMut();
+      C.vehicles=(C.vehicles||[]).filter(function(v){ return v.vehicleId!==id; }); renderFleet(); flash('Scooter removed.');
+      call('deleteVehicle',[id, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
+    });
   }
   // Edit a vehicle (label / type / status / notes) — also "allocate to staff".
   function openEditVehicle(id){
@@ -1840,6 +1918,22 @@
   }
   function settingsAddCottage(){ var nm=val('cot-newname'); if(!nm) return; C.cottages=(C.cottages||[]).concat([{ cottageId:'tmp', name:nm, active:true }]); renderSettings(); flash('Saving…'); return call('addCottage',[nm, A.token]).then(function(){ flash(nm+' added.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
   function settingsRemoveCottage(id){ C.cottages=(C.cottages||[]).filter(function(c){ return c.cottageId!==id; }); renderSettings(); flash('Removing…'); return call('deactivateCottage',[id, A.token]).then(function(){ flash('Cottage removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
+  // Charging points are a single manager-only Settings key (newline-delimited) — no
+  // dedicated server function, same pattern as other Settings values (updateMultipleSettings).
+  function settingsAddChargingPoint(){
+    var nm=val('cp-newname'); if(!nm) return;
+    var joined=chargingPointsList().concat([nm]).join('\n');
+    C.settings=C.settings||{}; C.settings.chargingPoints=joined;
+    renderSettings(); flash('Saving…');
+    return call('updateMultipleSettings',[{chargingPoints:joined}, A.operator, A.token]).then(function(){ flash(nm+' added.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
+  function settingsRemoveChargingPoint(idx){
+    var list=chargingPointsList(); list.splice(Number(idx),1);
+    var joined=list.join('\n');
+    C.settings=C.settings||{}; C.settings.chargingPoints=joined;
+    renderSettings(); flash('Removing…');
+    return call('updateMultipleSettings',[{chargingPoints:joined}, A.operator, A.token]).then(function(){ flash('Charging point removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
 
   function copyLink(){ var el=$('guest-link'); if(!el) return; el.select(); try{ document.execCommand('copy'); flash('Link copied.'); }catch(e){ flash('Select and copy the link.'); } }
   function openSheet(){ flash('Opening spreadsheet…'); call('getSpreadsheetUrl',[A.token]).then(function(u){ if(u) window.open(u,'_blank'); else flash('Spreadsheet URL unavailable.', true); }).catch(function(e){ flash(errMsg(e), true); }); }
@@ -1875,15 +1969,16 @@
       case 'ho-submit': withBtn(t, submitHandover()); break;
       case 'add-vehicle': openAddVehicle(); break;
       case 'av-submit': withBtn(t, submitAddVehicle()); break;
-      case 'veh-toggle': vehToggle(id, t.getAttribute('data-status')); break;
+      case 'veh-toggle': (t.getAttribute('data-status')==='Charging') ? openChargePicker('fleet', id) : vehToggle(id, t.getAttribute('data-status')); break;
       case 'veh-edit': openEditVehicle(id); break;
       case 've-submit': withBtn(t, submitEditVehicle()); break;
       case 'veh-delete': vehDelete(id); break;
       case 'yard-done': withBtn(t, submitYardDone(id)); break;
-      case 'yard-toggle': yardVehToggle(id, t.getAttribute('data-status')); break;
+      case 'yard-toggle': (t.getAttribute('data-status')==='Charging') ? openChargePicker('yard', id) : yardVehToggle(id, t.getAttribute('data-status')); break;
       case 'yard-location': openYardLocation(id); break;
       case 'yard-loc-pick': withBtn(t, submitYardLocation(t.getAttribute('data-loc'))); break;
       case 'yard-loc-submit': withBtn(t, submitYardLocation(null)); break;
+      case 'charge-pt-pick': submitChargePoint(t.getAttribute('data-pt')); break;
       case 'yard-chip': A.yardFilter=(A.yardFilter===t.getAttribute('data-status'))?'':t.getAttribute('data-status'); renderYard(); break;
       case 'yard-sort': A.yardSortAlpha=!A.yardSortAlpha; renderYard(); break;
       case 'yard-out-details': openYardBookingDetails(id); break;
@@ -1941,6 +2036,8 @@
       case 'op-remove': settingsRemoveOperator(id); break;
       case 'cot-add': settingsAddCottage(); break;
       case 'cot-remove': settingsRemoveCottage(id); break;
+      case 'cp-add': settingsAddChargingPoint(); break;
+      case 'cp-remove': settingsRemoveChargingPoint(t.getAttribute('data-idx')); break;
       case 'copy-link': copyLink(); break;
       case 'open-link': window.open((C&&C.webAppUrl||window.WEB_APP_URL||'')+(((C&&C.webAppUrl||window.WEB_APP_URL||'').indexOf('?')>=0)?'&':'?')+'mode=rider','_blank'); break;
       case 'open-sheet': openSheet(); break;

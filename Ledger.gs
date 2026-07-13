@@ -275,6 +275,15 @@ function rejectHandover(handoverId, token) {
 // pool; the operator for an operator→operator transfer) — not just any manager.
 function _decideHandover(handoverId, decision, token) {
   requireAdmin(token);
+  // Serialize the whole read-check-decide-write under the script lock so two concurrent
+  // decisions (or a decision racing a refund/transfer that moves the sender's balance)
+  // can't both pass the negative-drawer guard and overdraw a drawer (TOCTOU). Both public
+  // entry points (approveHandover/rejectHandover) funnel through here, so the lock is
+  // acquired exactly once per top-level call — never nested.
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
   const sheet = _getSS().getSheetByName('Handovers');
   const data = sheet.getDataRange().getValues();
   const managerLabel = getSettingValue('managerLabel') || 'Manager';
@@ -312,6 +321,9 @@ function _decideHandover(handoverId, decision, token) {
     }
   }
   throw new Error('Transfer not found.');
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Transfers waiting for ME to verify — the RECIPIENT's queue. A manager sees handovers
@@ -343,17 +355,27 @@ function recordRefund(amount, account, note, bookingId, token) {
   const amt = Math.round(Number(amount) || 0);
   if (amt <= 0) throw new Error('Enter a refund amount.');
   const acct = account === 'upi' ? 'upi' : 'cash';
-  // You can't pay out more cash than is on hand — a cap stops a typo'd refund (an extra
-  // zero) driving cash on hand / the manager drawer negative.
-  if (acct === 'cash') {
-    const acc = getAccountingSummary(token);
-    if (amt > acc.cashInHand + 1) throw new Error('Cannot refund more than the cash on hand (' + _inr(acc.cashInHand) + ').');
+  // Serialize the cash-on-hand cap check + append under the script lock so two concurrent
+  // refunds can't both read the same cash-on-hand figure and both pass the cap (TOCTOU),
+  // together driving cash on hand / the drawer negative.
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+    // You can't pay out more cash than is on hand — a cap stops a typo'd refund (an extra
+    // zero) driving cash on hand / the manager drawer negative.
+    if (acct === 'cash') {
+      const acc = getAccountingSummary(token);
+      if (amt > acc.cashInHand + 1) throw new Error('Cannot refund more than the cash on hand (' + _inr(acc.cashInHand) + ').');
+    }
+    const me = _opName(token);
+    _appendLedgerRows([{ type: 'Refund', direction: 'debit', amount: amt, account: acct,
+      operator: me, bookingId: bookingId || '', note: note || ('Refund by ' + me) }]);
+    _bumpDataVersion();
+    return { success: true };
+  } finally {
+    lock.releaseLock();
   }
-  const me = _opName(token);
-  _appendLedgerRows([{ type: 'Refund', direction: 'debit', amount: amt, account: acct,
-    operator: me, bookingId: bookingId || '', note: note || ('Refund by ' + me) }]);
-  _bumpDataVersion();
-  return { success: true };
 }
 
 // ─── Relieve / remit to the company (a REAL outflow, not an internal transfer) ──
@@ -364,12 +386,22 @@ function recordRelieve(amount, note, token) {
   const amt = Math.round(Number(amount) || 0);
   if (amt <= 0) throw new Error('Enter an amount to relieve.');
   const me = _opName(token) || 'Manager';
-  const acc = getAccountingSummary(token);
-  if (amt > acc.cashInHand + 1) throw new Error('Cannot relieve more than the cash on hand (' + _inr(acc.cashInHand) + ').');
-  _appendLedgerRows([{ type: 'Relieve', direction: 'debit', amount: amt, account: 'cash', operator: me,
-    note: note || ('Given to company by ' + me) }]);
-  _bumpDataVersion();
-  return { success: true };
+  // Serialize the cash-on-hand cap check + append under the script lock so two concurrent
+  // relieves can't both read the same cash-on-hand figure and both pass the cap (TOCTOU),
+  // together driving cash on hand negative.
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); }
+  catch (e) { throw new Error('The desk is busy right now. Please try again in a moment.'); }
+  try {
+    const acc = getAccountingSummary(token);
+    if (amt > acc.cashInHand + 1) throw new Error('Cannot relieve more than the cash on hand (' + _inr(acc.cashInHand) + ').');
+    _appendLedgerRows([{ type: 'Relieve', direction: 'debit', amount: amt, account: 'cash', operator: me,
+      note: note || ('Given to company by ' + me) }]);
+    _bumpDataVersion();
+    return { success: true };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Total cash relieved to the company (read from the ledger — its only home).
@@ -534,6 +566,22 @@ function runSelfAudit(token) {
   (dr.operators || []).forEach(function (o) {
     if (o.balance < -1) issues.push({ severity: 'medium', where: 'Drawer · ' + o.name, detail: 'Negative balance ' + _inr(o.balance) + ' — more handed over/refunded than collected.' });
   });
+
+  // 5) Backdated-return flags. processReturn marks a refund row's note 'FLAG:backdated…'
+  // when a return was processed after the deadline but recorded as on-time (a dodged late
+  // fee). Informational only — it never touches the numeric reconciliation above. One
+  // return posts two refund rows (cash + upi), so de-dupe by bookingId → one issue.
+  const seenBackdated = {};
+  for (let k = 1; k < ledData.length; k++) {
+    if (!ledData[k][LC.TXN_ID]) continue;
+    const note = String(ledData[k][LC.NOTE] || '');
+    if (note.indexOf('FLAG:backdated') !== 0) continue;
+    const bId = String(ledData[k][LC.BOOKING_ID] || '');
+    if (seenBackdated[bId]) continue;
+    seenBackdated[bId] = true;
+    issues.push({ severity: 'medium', where: 'Booking ' + bId,
+      detail: 'Return timestamp looks backdated (possible late-fee evasion) — ' + note });
+  }
 
   const ok = issues.length === 0;
   try { _ensureAuditSheet().appendRow([new Date(), ok ? 'PASS' : 'FAIL', acc.cashInHand, ledgerCash, cashDelta, issues.length, JSON.stringify(issues).slice(0, 4000)]); } catch (e) {}

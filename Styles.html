@@ -78,7 +78,7 @@
        font-weight:600;font-size:15px;padding:14px 22px;border-radius:14px;transition:background .2s,transform .05s;}
   .btn:active{transform:translateY(1px);}
   .btn-primary{background:var(--pine);color:#fff;box-shadow:var(--shadow);}
-  .btn-primary[disabled],.btn-primary.is-disabled{background:#CDC6B6;color:#8E877A;cursor:not-allowed;box-shadow:none;}
+  .btn-primary[disabled],.btn-primary.is-disabled{background:var(--surface-2);color:var(--muted-2);cursor:not-allowed;box-shadow:none;}
   .btn-ghost{background:none;color:var(--pine);box-shadow:none;}
 
   /* ── Form fields ── */
@@ -86,7 +86,7 @@
   .field-label .req{color:var(--terra-2);}
   .field{width:100%;padding:12px 14px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);
          font-size:14.5px;color:var(--ink);transition:border-color .15s;}
-  .field::placeholder{color:#B6AE9D;}
+  .field::placeholder{color:var(--faint);}
   /* iOS Safari auto-zooms on focus into any input under 16px — bump it back up on phones only. */
   @media(max-width:640px){ .field{font-size:16px;} }
 
@@ -94,7 +94,7 @@
   .toggle{display:flex;align-items:center;gap:11px;width:100%;justify-content:flex-start;
           padding:11px 16px;border-radius:13px;border:1px solid var(--line-2);background:var(--surface);
           color:var(--muted);font-size:14px;font-weight:600;cursor:pointer;transition:.2s;}
-  .toggle .box{width:24px;height:24px;border-radius:7px;border:2px solid #C9C0AE;background:transparent;
+  .toggle .box{width:24px;height:24px;border-radius:7px;border:2px solid var(--line-2);background:transparent;
                display:flex;align-items:center;justify-content:center;flex:none;transition:.2s;}
   .toggle .box svg{opacity:0;transition:opacity .15s;}
   .toggle.on{border-color:var(--pine);background:var(--pine-tint);color:var(--pine);}
@@ -102,7 +102,7 @@
   .toggle.on .box svg{opacity:1;}
 
   /* ── Section number chip ── */
-  .num{font-family:var(--serif);font-size:20px;font-weight:500;color:#B6AE9D;background:var(--surface-2);
+  .num{font-family:var(--serif);font-size:20px;font-weight:500;color:var(--faint);background:var(--surface-2);
        width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;flex:none;transition:.2s;}
   .term.on .num{color:var(--pine);background:var(--pine-tint);}
   .term{transition:border-color .2s,box-shadow .2s;margin-bottom:16px;}
@@ -117,6 +117,21 @@
   .anim-pop{animation:agPop .4s cubic-bezier(.2,.9,.3,1.2) both;}
   @keyframes skPulse{0%,100%{opacity:.5;}50%{opacity:.85;}}
   .sk{animation:skPulse 1.1s ease-in-out infinite;}
+
+  /* ── Vehicle card motion (Fleet / Yard) ──────────────────────────────────
+     A vehicle card is rebuilt via innerHTML on every render, so a status
+     change/add/remove used to teleport with zero motion. These classes give
+     just the card the user acted on a gentle settle-in (charge toggle, add)
+     or fade-out (delete) — never the whole grid, and never a pulse re-render
+     (that's gated in JS by only ever tagging the single acted-on card). */
+  @keyframes vcSettle{from{opacity:0;transform:translateY(4px) scale(.97);}to{opacity:1;transform:translateY(0) scale(1);}}
+  .vehicle-card{transition:opacity .22s ease-out,transform .22s ease-out;}
+  .vehicle-card.vc-settle{animation:vcSettle .22s ease-out both;}
+  .vehicle-card.vc-leaving{opacity:0;transform:scale(.94);}
+  @media (prefers-reduced-motion:reduce){
+    .vehicle-card{transition:none;}
+    .vehicle-card.vc-settle{animation:none;}
+  }
 
   /* ── Toast ── */
   .toast{position:fixed;bottom:96px;left:50%;transform:translateX(-50%);z-index:80;
