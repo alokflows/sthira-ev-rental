@@ -1176,21 +1176,38 @@
         +'<div class="rb-fill" style="height:'+Math.max(2,h)+'%;"></div><div class="rb-lbl">'+esc(d.date)+'</div></div>';
     }).join('')+'</div>';
   }
-  function _donut(pieces, centerVal, centerLbl, total){
-    // pieces: [{pct, color, lbl}]
-    var grad=pieces.map(function(p,i){ var start=0; for(var j=0;j<i;j++) start+=pieces[j].pct; return p.color+' '+start+'% '+(start+p.pct)+'%'; }).join(',');
+  // SVG donut — works in GAS sandbox (conic-gradient with var() is broken in Caja)
+  function _svgDonut(pieces, size, ringW, centerVal, centerLbl){
+    var r=15.9155, circ=100; // r = 50/(2*PI) → circumference = exactly 100
+    var offset=0;
+    var circles=pieces.map(function(p){
+      var dash=p.pct+' '+(100-p.pct);
+      var svg='<circle cx="18" cy="18" r="'+r+'" fill="none" stroke="'+p.color+'" stroke-width="'+ringW+'" stroke-dasharray="'+dash+'" stroke-dashoffset="'+(-offset)+'" transform="rotate(-90 18 18)"/>';
+      offset+=p.pct;
+      return svg;
+    }).join('');
     var legend=pieces.map(function(p){ return '<div class="rpt-legend-item"><span class="dot" style="background:'+p.color+';"></span>'+esc(p.lbl)+' · <b>'+p.pct+'%</b></div>'; }).join('');
-    return '<div class="rpt-donut-wrap"><div class="rpt-donut" style="background:conic-gradient('+grad+');">'
-      +'<div class="donut-center"><div class="dc-val">'+centerVal+'</div><div class="dc-lbl">'+centerLbl+'</div></div></div>'
+    return '<div class="rpt-donut-wrap"><div class="rpt-donut" style="width:'+size+'px;height:'+size+'px;background:var(--surface-2);border-radius:50%;position:relative;flex:none;">'
+      +'<svg viewBox="0 0 36 36" style="width:100%;height:100%;transform:rotate(0deg);">'+circles+'</svg>'
+      +'<div class="donut-center" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1;">'
+      +'<div class="dc-val" style="font-family:var(--serif);font-size:'+(size>100?'22px':'18px')+';font-weight:500;color:var(--ink);">'+centerVal+'</div>'
+      +'<div class="dc-lbl" style="font-size:10.5px;color:var(--muted-2);margin-top:2px;">'+centerLbl+'</div></div></div>'
       +'<div class="rpt-legend">'+legend+'</div></div>';
   }
-  // Compact mini-donut for Quick Glance strip
+  // Compact mini-donut for Quick Glance strip (SVG)
   function _miniDonut(pieces, title){
-    // pieces: [{pct, color, lbl}] — pct of the PRIMARY segment (first item) shown in center
-    var grad=pieces.map(function(p,i){ var start=0; for(var j=0;j<i;j++) start+=pieces[j].pct; return p.color+' '+start+'% '+(start+p.pct)+'%'; }).join(',');
+    var r=15.9155, circ=100, offset=0;
+    var circles=pieces.map(function(p){
+      var dash=p.pct+' '+(100-p.pct);
+      var svg='<circle cx="18" cy="18" r="'+r+'" fill="none" stroke="'+p.color+'" stroke-width="4" stroke-dasharray="'+dash+'" stroke-dashoffset="'+(-offset)+'" transform="rotate(-90 18 18)"/>';
+      offset+=p.pct;
+      return svg;
+    }).join('');
     var legend=pieces.map(function(p){ return '<b>'+p.pct+'%</b> '+esc(p.lbl); }).join(' · ');
-    return '<div class="rpt-glance-item"><div class="rg-donut" style="background:conic-gradient('+grad+');">'
-      +'<div class="rg-center"><div class="rg-val">'+pieces[0].pct+'%</div></div></div>'
+    return '<div class="rpt-glance-item"><div class="rg-donut" style="width:90px;height:90px;background:var(--surface-2);border-radius:50%;position:relative;flex:none;margin-bottom:10px;">'
+      +'<svg viewBox="0 0 36 36" style="width:100%;height:100%;">'+circles+'</svg>'
+      +'<div class="rg-center" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1;">'
+      +'<div class="rg-val" style="font-family:var(--serif);font-size:18px;font-weight:500;color:var(--ink);line-height:1;">'+pieces[0].pct+'%</div></div></div>'
       +'<div class="rg-title">'+esc(title)+'</div><div class="rg-legend">'+legend+'</div></div>';
   }
   function _hbar(items, maxVal){
@@ -1298,7 +1315,7 @@
     if(f.charging) fPieces.push({pct:Math.round(f.charging/f.total*100),color:'var(--gold)',lbl:'Charging'});
     if(f.maintenance) fPieces.push({pct:Math.max(0,100-fPieces.reduce(function(s,p){return s+p.pct;},0)),color:'var(--muted-2)',lbl:'Maintenance'});
     var fleetSec=f.total?'<div class="rpt-section"><h3>Fleet Status</h3><p class="rpt-sub">Current snapshot</p>'
-      +_donut(fPieces, f.utilization+'%', 'Utilized', f.total)+'</div>':'';
+      +_svgDonut(fPieces, 180, 5.5, f.utilization+'%', 'Utilized')+'</div>':'';
 
     // Cottage breakdown
     var cotItems=Object.keys(c.cottages).map(function(k){ var v=c.cottages[k]; return {lbl:v.name,val:v.count,display:v.count+' · '+inr(v.revenue),color:'var(--pine)'}; })
@@ -1308,10 +1325,10 @@
     // Payment mix
     var payTotal=c.cashTotal+c.upiTotal;
     var paySec=payTotal?'<div class="rpt-section"><h3>Payment Mix</h3><p class="rpt-sub">Cash vs UPI collection</p>'
-      +_donut([
+      +_svgDonut([
         {pct:Math.round(c.cashTotal/payTotal*100),color:'var(--pine)',lbl:'Cash '+inr(c.cashTotal)},
         {pct:Math.max(0,100-Math.round(c.cashTotal/payTotal*100)),color:'var(--gold)',lbl:'UPI '+inr(c.upiTotal)}
-      ], inr(payTotal), 'Total collected')+'</div>':'';
+      ], 180, 5.5, inr(payTotal), 'Total collected')+'</div>':'';
 
     // Operator performance
     var opItems=Object.keys(c.operators).map(function(k){return c.operators[k];}).sort(function(a,b){return b.revenue-a.revenue;});
