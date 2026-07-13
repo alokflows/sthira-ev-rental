@@ -1126,7 +1126,7 @@
         var op=b.operatorBooked||'—'; if(!operators[op]) operators[op]={name:op,bookings:0,revenue:0}; operators[op].bookings++; operators[op].revenue+=Number(b.rentAmount)||0;
       }
       totalRevenue=totalRent+totalLateFees;
-      var profit=totalRent+totalLateFees-totalDeductions-totalRefunds;
+      var profit=totalRent+totalLateFees+totalDeductions;
       var ms=to.getTime()-from.getTime()+86400000;
       var spanDays=Math.max(1,Math.round(ms/86400000));
       return {totalRevenue:totalRevenue,totalRent:totalRent,totalDeposits:totalDeposits,totalLateFees:totalLateFees,
@@ -1199,7 +1199,7 @@
     var r=15.9155, circ=100, offset=0;
     var circles=pieces.map(function(p){
       var dash=p.pct+' '+(100-p.pct);
-      var svg='<circle cx="18" cy="18" r="'+r+'" fill="none" stroke="'+p.color+'" stroke-width="4" stroke-dasharray="'+dash+'" stroke-dashoffset="'+(-offset)+'" transform="rotate(-90 18 18)"/>';
+      var svg='<circle cx="18" cy="18" r="'+r+'" fill="none" stroke="'+p.color+'" stroke-width="5" stroke-dasharray="'+dash+'" stroke-dashoffset="'+(-offset)+'" transform="rotate(-90 18 18)"/>';
       offset+=p.pct;
       return svg;
     }).join('');
@@ -1315,7 +1315,7 @@
     if(f.charging) fPieces.push({pct:Math.round(f.charging/f.total*100),color:'var(--gold)',lbl:'Charging'});
     if(f.maintenance) fPieces.push({pct:Math.max(0,100-fPieces.reduce(function(s,p){return s+p.pct;},0)),color:'var(--muted-2)',lbl:'Maintenance'});
     var fleetSec=f.total?'<div class="rpt-section"><h3>Fleet Status</h3><p class="rpt-sub">Current snapshot</p>'
-      +_svgDonut(fPieces, 180, 5.5, f.utilization+'%', 'Utilized')+'</div>':'';
+      +_svgDonut(fPieces, 180, 8, f.utilization+'%', 'Utilized')+'</div>':'';
 
     // Cottage breakdown
     var cotItems=Object.keys(c.cottages).map(function(k){ var v=c.cottages[k]; return {lbl:v.name,val:v.count,display:v.count+' · '+inr(v.revenue),color:'var(--pine)'}; })
@@ -1328,7 +1328,7 @@
       +_svgDonut([
         {pct:Math.round(c.cashTotal/payTotal*100),color:'var(--pine)',lbl:'Cash '+inr(c.cashTotal)},
         {pct:Math.max(0,100-Math.round(c.cashTotal/payTotal*100)),color:'var(--gold)',lbl:'UPI '+inr(c.upiTotal)}
-      ], 180, 5.5, inr(payTotal), 'Total collected')+'</div>':'';
+      ], 180, 8, inr(payTotal), 'Total collected')+'</div>':'';
 
     // Operator performance
     var opItems=Object.keys(c.operators).map(function(k){return c.operators[k];}).sort(function(a,b){return b.revenue-a.revenue;});
@@ -1360,8 +1360,8 @@
       +'<button class="btn btn-email" data-action="save-reports">💾 Save email</button>'
       +'</div></div>':'';
 
-    $('view-reports').innerHTML='<div class="'+animCls()+'">'+hdr+insight+glance+'<div class="rpt-kpi">'+kpis+'</div>'
-      +revChart+funnel+fleetSec+cotSec+paySec+opTable+breakdown+exportRow+'</div>';
+    $('view-reports').innerHTML='<div class="'+animCls()+'">'+hdr+glance+insight+'<div class="rpt-kpi">'+kpis+'</div>'
+      +revChart+funnel+'<div class="rpt-donut-grid">'+fleetSec+paySec+'</div>'+cotSec+opTable+breakdown+exportRow+'</div>';
   }
 
   // ── Report actions ──
