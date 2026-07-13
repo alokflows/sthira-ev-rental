@@ -836,19 +836,19 @@
       openModal('Set location', v.label, body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button>');
       return;
     }
-    var body='<div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:16px;">'
+    var body='<div style="display:flex;gap:9px;flex-wrap:wrap;">'
       +picks.map(function(p){ return '<button class="chip" data-action="yard-loc-pick" data-loc="'+esc(p)+'">'+p+'</button>'; }).join('')
-      +'</div><label class="field-label">Or type a location</label><input id="yl-text" class="field" value="'+esc(v.location||'')+'" placeholder="e.g. behind cottage 3">';
-    openModal('Set location', v.label, body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="yard-loc-submit">Save</button>');
+      +'</div>';
+    openModal('Set location', v.label, body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button>');
   }
   function submitYardLocation(loc){
-    var id=window._yardLocId, chosen=(loc!=null)?loc:val('yl-text');
-    if(!chosen){ flash('Enter a location.', true); return; }
+    var id=window._yardLocId;
+    if(!loc){ flash('Pick a location.', true); return; }
     beginMut();
-    (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===id) v.location=chosen; });
+    (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===id) v.location=loc; });
     closeModal(); rerenderCurrent();
     flash('Location updated.');
-    return call('setVehicleLocation',[id, chosen, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
+    return call('setVehicleLocation',[id, loc, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){ endMut(); flash(errMsg(e), true); silentRefresh(); });
   }
 
   // Plug-in-to-charge REQUIRES picking a configured charging point (Settings → Charging
@@ -2057,7 +2057,6 @@
       case 'yard-toggle': (t.getAttribute('data-status')==='Charging') ? openChargePicker('yard', id) : yardVehToggle(id, t.getAttribute('data-status')); break;
       case 'yard-location': openYardLocation(id); break;
       case 'yard-loc-pick': withBtn(t, submitYardLocation(t.getAttribute('data-loc'))); break;
-      case 'yard-loc-submit': withBtn(t, submitYardLocation(null)); break;
       case 'charge-pt-pick': submitChargePoint(t.getAttribute('data-pt')); break;
       case 'yard-chip': A.yardFilter=(A.yardFilter===t.getAttribute('data-status'))?'':t.getAttribute('data-status'); renderYard(); break;
       case 'yard-sort': A.yardSortAlpha=!A.yardSortAlpha; renderYard(); break;
