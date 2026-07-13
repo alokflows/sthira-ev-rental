@@ -432,8 +432,8 @@
     if(st==='returned') return { label:'Returned', bg:'var(--surface-2)', fg:'var(--muted-2)' };
     if(st==='cancelled') return { label:'Cancelled', bg:'var(--terra-tint)', fg:'var(--terra)' };
     if(st==='deleted') return { label:'Record deleted', bg:'var(--terra-tint)', fg:'var(--terra)' };
-    if(st==='staff') return { label:'Staff', bg:'var(--surface-2)', fg:'#3F5E82' };
-    return { label:st, bg:'#eee', fg:'#555' };
+    if(st==='staff') return { label:'Staff', bg:'var(--surface-2)', fg:'var(--txt-2)' };
+    return { label:st, bg:'var(--surface-2)', fg:'var(--muted-2)' };
   }
   // Manager-configured charging points (Settings → Charging points), stored as a single
   // newline-delimited Settings value (see Config.gs DEFAULT_SETTINGS.chargingPoints).
