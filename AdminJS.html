@@ -441,6 +441,10 @@
   function chargingPointsList(){
     return String((C.settings&&C.settings.chargingPoints)||'').split('\n').map(function(s){ return s.trim(); }).filter(function(s){ return s; });
   }
+  // Manager-configured locations (Settings → Locations) — same format as charging points.
+  function locationsList(){
+    return String((C.settings&&C.settings.locations)||'').split('\n').map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+  }
   // Today's worklist, grouped: what the desk acts on today. Returns done today close the loop.
   function bkTodayGroups(){
     var t=todayStr();
@@ -693,7 +697,7 @@
       +'<div style="font-size:13px;color:var(--txt-2);margin-top:4px;display:flex;align-items:center;gap:6px;">'
       +'<a href="tel:'+esc(b.mobile)+'" style="color:var(--pine);text-decoration:none;font-weight:600;">📞 '+esc(b.mobile)+'</a>'
       +(b.cottageName?' <span style="color:var(--line-3);">|</span> '+esc(b.cottageName):'')+'</div>'
-      +'<button class="btn-lg" data-action="yard-done" data-id="'+esc(b.bookingId)+'" style="width:100%;margin-top:14px;min-height:48px;">Scooter handed over</button>'
+      +'<button class="btn-lg" data-action="yard-handover" data-id="'+esc(b.bookingId)+'" style="width:100%;margin-top:14px;min-height:48px;">Scooter handed over</button>'
       +'</div>';
   }
   function yardVehicleCard(v){
@@ -704,12 +708,10 @@
     var IB_C='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
     var IB_PIN='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg>';
     var nextCharge=v.status==='Charging'?'Available':'Charging';
-    var nextMaint=v.status==='Maintenance'?'Available':'Maintenance';
     var btns='';
     if(v.status!=='Out'){
       btns+='<button class="veh-ib" data-action="yard-location" data-id="'+esc(v.vehicleId)+'" title="Set location" style="width:44px;height:44px;border-radius:12px;">'+IB_PIN+'</button>';
       btns+='<button class="veh-ib" data-action="yard-toggle" data-id="'+esc(v.vehicleId)+'" data-status="'+nextCharge+'" title="'+(v.status==='Charging'?'Charged — mark available':'Plug in to charge')+'" style="width:44px;height:44px;border-radius:12px;">'+(v.status==='Charging'?IB_C:IB_L)+'</button>';
-      btns+='<button class="veh-ib" data-action="yard-toggle" data-id="'+esc(v.vehicleId)+'" data-status="'+nextMaint+'" title="'+(v.status==='Maintenance'?'Mark available':'Send to maintenance')+'" style="width:44px;height:44px;border-radius:12px;">'+(v.status==='Maintenance'?IB_C:IB_W)+'</button>';
     } else if(v.activeBooking) {
       btns+='<button class="btn" data-action="yard-out-details" data-id="'+esc(v.activeBooking.bookingId)+'" style="flex:1;background:var(--pine-tint);color:var(--pine);border:none;font-weight:600;border-radius:12px;padding:8px;font-size:13.5px;">Guest details</button>';
     }
@@ -774,16 +776,41 @@
       +'<div class="panel"><h2 style="margin-bottom:6px;">Due back today</h2>'+dueHtml+'</div>'
       +'</div></div></div>';
   }
-  function submitYardDone(bookingId){
+  function submitYardDone(bookingId, location){
     beginMut();
     (C.bookings||[]).forEach(function(b){ if(b.bookingId===bookingId) b.yardDoneAt=new Date().toISOString(); });
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(b&&b.vehicleId&&location){
+      (C.vehicles||[]).forEach(function(v){ if(v.vehicleId===b.vehicleId) v.location=location; });
+    }
     renderYard(); updateChrome();
     flash('Marked as handed over.');
-    return call('markYardDone',[bookingId, A.token]).then(function(){ endMut(); silentRefresh(); }).catch(function(e){
+    var p=call('markYardDone',[bookingId, A.token]);
+    if(b&&b.vehicleId&&location) p=p.then(function(){ return call('setVehicleLocation',[b.vehicleId, location, A.token]); });
+    return p.then(function(){ endMut(); silentRefresh(); }).catch(function(e){
       endMut();
-      (C.bookings||[]).forEach(function(b){ if(b.bookingId===bookingId) b.yardDoneAt=''; });
+      (C.bookings||[]).forEach(function(b2){ if(b2.bookingId===bookingId) b2.yardDoneAt=''; });
       flash(errMsg(e), true); silentRefresh();
     });
+  }
+  function openYardHandover(bookingId){
+    var b=(C.bookings||[]).filter(function(x){return x.bookingId===bookingId;})[0];
+    if(!b){ flash('Booking not found.', true); return; }
+    var picks=locationsList();
+    if(!picks.length){
+      submitYardDone(bookingId);
+      return;
+    }
+    window._yardHndId=bookingId;
+    var body='<div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:16px;">'
+      +picks.map(function(p){ return '<button class="chip" data-action="yard-hnd-pick" data-loc="'+esc(p)+'">'+esc(p)+'</button>'; }).join('')
+      +'</div>';
+    openModal('Hand over scooter', (b.vehicleLabel||'—')+' → '+esc(b.riderName), body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="yard-hnd-skip">Skip location</button>');
+  }
+  function submitYardHandover(loc){
+    var id=window._yardHndId;
+    closeModal();
+    submitYardDone(id, loc||'');
   }
   function yardVehToggle(id, status, point){
     beginMut();
@@ -803,7 +830,12 @@
     var v=(C.vehicles||[]).filter(function(x){return x.vehicleId===id;})[0];
     if(!v){ flash('Vehicle not found — refreshing.', true); silentRefresh(); return; }
     window._yardLocId=id;
-    var picks=['Yard','Charging point','Pickup point'];
+    var picks=locationsList();
+    if(!picks.length){
+      var body='<div style="font-size:13px;color:var(--muted-2);">No locations configured yet. Add them in Settings → Locations.</div>';
+      openModal('Set location', v.label, body, '<button class="btn-ghost-lg" data-action="modal-close">Cancel</button>');
+      return;
+    }
     var body='<div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:16px;">'
       +picks.map(function(p){ return '<button class="chip" data-action="yard-loc-pick" data-loc="'+esc(p)+'">'+p+'</button>'; }).join('')
       +'</div><label class="field-label">Or type a location</label><input id="yl-text" class="field" value="'+esc(v.location||'')+'" placeholder="e.g. behind cottage 3">';
@@ -1057,6 +1089,11 @@
     var gCharging=card('Charging points','Where scooters can charge. The yard must pick one of these when plugging a scooter in.',
           (cpRows||'<div class="empty" style="padding:8px 0;">No charging points yet — add one below.</div>')
         +'<div style="display:flex;gap:8px;margin-top:14px;"><input id="cp-newname" class="field" placeholder="Add a charging point…"><button class="btn btn-primary" data-action="cp-add" style="padding:12px 18px;">Add</button></div>');
+    var locList=locationsList();
+    var locRows=locList.map(function(p,i){ return '<div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1px solid var(--hair);"><div style="flex:1;font-weight:600;font-size:14.5px;">'+esc(p)+'</div><button class="link-btn" data-action="loc-remove" data-idx="'+i+'" style="color:var(--terra);">Remove</button></div>'; }).join('');
+    var gLocations=card('Locations','Where scooters are parked. The yard picks one of these when handing a scooter over.',
+          (locRows||'<div class="empty" style="padding:8px 0;">No locations yet — add one below.</div>')
+        +'<div style="display:flex;gap:8px;margin-top:14px;"><input id="loc-newname" class="field" placeholder="Add a location…"><button class="btn btn-primary" data-action="loc-add" style="padding:12px 18px;">Add</button></div>');
     var gOperatorsList=card('Operators &amp; access','Each operator signs in with their own 6-digit PIN — it identifies who is at the desk. The manager is shown at the top.',
           opRows+'<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center;"><input id="op-newname" class="field" placeholder="New operator name…" style="flex:1;min-width:140px;"><input id="op-newpin" class="field" type="text" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" style="width:120px;"><select id="op-newrole" class="field" style="width:138px;"><option value="Operator">Operator</option><option value="Supervisor">Supervisor</option><option value="Yard">Yard</option></select><button class="btn btn-primary" data-action="op-add" style="padding:12px 18px;">Add</button></div>');
     var gAccess=card('Desk access','Manager label shown across the desk.',
@@ -1098,7 +1135,7 @@
         +(isMgr()?'<button class="btn" data-action="open-sheet" style="margin-top:14px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Open data spreadsheet ↗</button>':''));
 
     // Guest-form group = everything riders touch (managers edit; operators just get the link).
-    var gGuestForm=(isMgr()?gPricing+gCottages+gCharging+gEmail:'')+gLink;
+    var gGuestForm=(isMgr()?gPricing+gCottages+gCharging+gLocations+gEmail:'')+gLink;
     // Operators group (manager-only): operators list full-width, then access + powers
     // side by side, then the Supervisor-powers grant card full-width beneath.
     var gOperators=gOperatorsList+'<div class="set-pair">'+gAccess+gPowers+'</div>'+gSupPowers;
@@ -1282,7 +1319,9 @@
       +'<div class="summary" style="background:var(--pine-tint);border-color:var(--pine-line);"><div class="sr"><span style="color:var(--muted);">Deposit held</span><span style="font-weight:600;">'+inr(dep)+'</span></div>'
       +'<div class="sr"><span style="color:var(--muted);">Damage / cleaning</span><span id="rt-dmg-lbl" style="font-weight:600;color:var(--terra);">− ₹0</span></div>'
       +'<div class="sr" id="rt-late"></div>'
-      +'<div class="sr total"><span style="font-weight:600;">Refund to guest</span><span class="amt" id="rt-refund" style="color:var(--pine);">'+inr(dep)+'</span></div></div>';
+      +'<div class="sr total"><span style="font-weight:600;">Refund to guest</span><span class="amt" id="rt-refund" style="color:var(--pine);">'+inr(dep)+'</span></div></div>'
+      +'<div style="margin:18px 0 8px;"><label class="field-label">Refund method</label><div style="display:flex;gap:9px;"><button class="seg on" data-action="rt-method" data-m="same">Same as deposit</button><button class="seg" data-action="rt-method" data-m="cash">Cash</button><button class="seg" data-action="rt-method" data-m="upi">UPI</button><button class="seg" data-action="rt-method" data-m="split">Split</button></div></div>'
+      +'<div id="rt-split" class="hidden"><div class="gf"><div><label class="field-label">Cash (₹)</label><input id="rt-cash" class="field" type="number" placeholder="0"></div><div><label class="field-label">UPI (₹)</label><input id="rt-upi" class="field" type="number" placeholder="0"></div></div><div id="rt-splitnote" style="font-size:12.5px;margin-top:8px;"></div></div>';
     var footer='<button class="btn-ghost-lg" data-action="modal-close">Cancel</button><button class="btn-lg" data-action="rt-submit">Settle &amp; refund</button>';
     openModal('Process return', b.riderName+' · '+(b.vehicleLabel||'—')+' · '+b.bookingId, body, footer);
     // Recompute the late fee LIVE — the preview is otherwise frozen at modal-open time and
@@ -1300,11 +1339,35 @@
     }
     $('rt-damage').oninput=updateReturnPreview;
     window._returnCtx.timer=setInterval(updateReturnPreview, 20000);
+    window._returnCtx.method='same';
+    ['rt-cash','rt-upi'].forEach(function(id){ var el=$(id); if(el) el.oninput=rtSplitNote; });
     updateReturnPreview();
+  }
+  function rtMethod(m){
+    window._returnCtx.method=m;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-action="rt-method"]'), function(btn){ btn.classList.toggle('on', btn.getAttribute('data-m')===m); });
+    $('rt-split').classList.toggle('hidden', m!=='split'); rtSplitNote();
+  }
+  function rtSplitNote(){
+    if(window._returnCtx.method!=='split') return;
+    var ctx=window._returnCtx, b=ctx.b, dmg=Number(val('rt-damage'))||0;
+    var lp=ctx.lateFee||0, refund=Math.max(0,(Number(b.depositAmount)||0)-dmg-lp);
+    var cash=Number(val('rt-cash'))||0, upi=Number(val('rt-upi'))||0, rem=refund-cash-upi;
+    var note=$('rt-splitnote'); if(!note) return;
+    if(rem===0){ note.textContent='✓ Split balances exactly'; note.style.color='var(--pine-soft)'; }
+    else if(rem>0){ note.textContent=inr(rem)+' still to allocate'; note.style.color='var(--terra)'; }
+    else { note.textContent=inr(-rem)+' over refund'; note.style.color='var(--terra)'; }
   }
   function submitReturn(){
     var b=window._returnCtx.b, dmg=Number(val('rt-damage'))||0, note=val('rt-note');
-    var returnData={ actualReturn:new Date().toISOString(), refundMode:'same', operatorName:A.operator, notes:note, deductions: dmg>0?[{amount:dmg, reason:'Damage/cleaning'}]:[] };
+    var method=window._returnCtx.method||'same';
+    var refund=Math.max(0,(Number(b.depositAmount)||0)-dmg-Number((window._returnCtx&&window._returnCtx.lateFee)||0));
+    var returnData={ actualReturn:new Date().toISOString(), refundMode:method, operatorName:A.operator, notes:note, deductions: dmg>0?[{amount:dmg, reason:'Damage/cleaning'}]:[] };
+    if(method==='split'){
+      var cash=Number(val('rt-cash'))||0, upi=Number(val('rt-upi'))||0;
+      if(Math.round(cash+upi)!==Math.round(refund)){ flash('Split must add up to '+inr(refund)+'.', true); return; }
+      returnData.refundCash=cash; returnData.refundUPI=upi;
+    }
     // Optimistic + instant: close the modal and update the desk NOW, then settle on the
     // server in the background. The little top-right sync dot shows the save is in flight;
     // a real failure rolls the desk back and re-opens this modal so the operator can settle
@@ -1934,6 +1997,21 @@
     renderSettings(); flash('Removing…');
     return call('updateMultipleSettings',[{chargingPoints:joined}, A.operator, A.token]).then(function(){ flash('Charging point removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
   }
+  // Locations — same newline-delimited Settings key pattern as charging points.
+  function settingsAddLocation(){
+    var nm=val('loc-newname'); if(!nm) return;
+    var joined=locationsList().concat([nm]).join('\n');
+    C.settings=C.settings||{}; C.settings.locations=joined;
+    renderSettings(); flash('Saving…');
+    return call('updateMultipleSettings',[{locations:joined}, A.operator, A.token]).then(function(){ flash(nm+' added.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
+  function settingsRemoveLocation(idx){
+    var list=locationsList(); list.splice(Number(idx),1);
+    var joined=list.join('\n');
+    C.settings=C.settings||{}; C.settings.locations=joined;
+    renderSettings(); flash('Removing…');
+    return call('updateMultipleSettings',[{locations:joined}, A.operator, A.token]).then(function(){ flash('Location removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); });
+  }
 
   function copyLink(){ var el=$('guest-link'); if(!el) return; el.select(); try{ document.execCommand('copy'); flash('Link copied.'); }catch(e){ flash('Select and copy the link.'); } }
   function openSheet(){ flash('Opening spreadsheet…'); call('getSpreadsheetUrl',[A.token]).then(function(u){ if(u) window.open(u,'_blank'); else flash('Spreadsheet URL unavailable.', true); }).catch(function(e){ flash(errMsg(e), true); }); }
@@ -1974,6 +2052,9 @@
       case 've-submit': withBtn(t, submitEditVehicle()); break;
       case 'veh-delete': vehDelete(id); break;
       case 'yard-done': withBtn(t, submitYardDone(id)); break;
+      case 'yard-handover': openYardHandover(id); break;
+      case 'yard-hnd-pick': submitYardHandover(t.getAttribute('data-loc')); break;
+      case 'yard-hnd-skip': submitYardHandover(''); break;
       case 'yard-toggle': (t.getAttribute('data-status')==='Charging') ? openChargePicker('yard', id) : yardVehToggle(id, t.getAttribute('data-status')); break;
       case 'yard-location': openYardLocation(id); break;
       case 'yard-loc-pick': withBtn(t, submitYardLocation(t.getAttribute('data-loc'))); break;
@@ -2024,6 +2105,7 @@
       case 'cf-method': cfMethod(t.getAttribute('data-m')); break;
       case 'cf-submit': withBtn(t, submitConfirm()); break;
       case 'rt-submit': withBtn(t, submitReturn()); break;
+      case 'rt-method': rtMethod(t.getAttribute('data-m')); break;
       case 'save-pricing': withBtn(t, savePricing()); break;
       case 'save-access': withBtn(t, saveAccess()); break;
       case 'save-email': withBtn(t, saveEmail()); break;
@@ -2038,6 +2120,8 @@
       case 'cot-remove': settingsRemoveCottage(id); break;
       case 'cp-add': settingsAddChargingPoint(); break;
       case 'cp-remove': settingsRemoveChargingPoint(t.getAttribute('data-idx')); break;
+      case 'loc-add': settingsAddLocation(); break;
+      case 'loc-remove': settingsRemoveLocation(t.getAttribute('data-idx')); break;
       case 'copy-link': copyLink(); break;
       case 'open-link': window.open((C&&C.webAppUrl||window.WEB_APP_URL||'')+(((C&&C.webAppUrl||window.WEB_APP_URL||'').indexOf('?')>=0)?'&':'?')+'mode=rider','_blank'); break;
       case 'open-sheet': openSheet(); break;

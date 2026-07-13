@@ -59,5 +59,23 @@ Codebase is stable. No backend `.gs` controllers were mutated, ensuring no schem
 * **Expandable Modal Pattern**: To drastically reduce clutter on mobile, the Fleet cards now only show two quick-action buttons directly on the card (`Set Location` and `Toggle Charging`). Tapping the body of the card itself opens a "Manage Scooter" modal containing the deeper options (`Send to Maintenance`, `Edit`, and `Delete`).
 * **Triage Sorting & Chips**: Imported the exact same sorting flow from the Yard view. Fleet now features Triage filter chips (Available, Charging, Out, Maintenance) and an A-Z / Grouped sorting toggle right next to the "Add Vehicle" button.
 * **Temporary IDs Hidden**: Stopped rendering the system `vehicleId` (e.g. `temp_17...` or `EV001`) on the Fleet cards entirely to prevent clutter and confusion with the custom scooter labels.
-* **Messy Notes Removed**: Removed the display of the `v.notes` field from the primary card UI to prevent messy data entry (e.g., users typing "Idle at desk and charging") from overriding the clean system statuses.
+* **Messy Notes Removed**: Removed the display of the `v.notes` field from the primary card UI to prevent messy data entry (e.g. users typing "Idle at desk and charging") from overriding the clean system statuses.
 * **Charging Availability Rule**: Modified `availableVehicles()` and `getPublicAvailableCount()` so that scooters with the 'Charging' status are **no longer bookable** by the public or the desk. They must be explicitly moved to 'Available' by the Yard/Desk first.
+
+## 11. Refund Mode & Ledger Attribution (Returns.gs + AdminJS.html)
+* **Refund Payment Mode**: Added Cash/UPI/Split/Same-as-deposit selector to the return modal. Previously the refund mode was auto-filled from how the deposit was collected (the operator had no say). Now the operator can explicitly choose how to refund the guest.
+* **Split Refund**: Supports explicit Cash + UPI split with live balance check (mirrors the confirm-booking split pattern). The server validates that split amounts sum to the refund total.
+* **Server Validation**: `Returns.gs` now throws if a split refund doesn't balance, preventing ledger corruption. Cap-to-collected logic still applies for same/cash/upi modes.
+* **Ledger Attribution**: Refund and deposit-refund ledger rows now carry a note: "Return processed by {operatorName}". This makes it clear who settled each return in the passbook.
+
+## 12. Admin-Configurable Locations (Config.gs + AdminJS.html)
+* **Locations Setting**: Added `locations` to `DEFAULT_SETTINGS` (newline-delimited, same pattern as `chargingPoints`). Manager-only setting.
+* **`locationsList()` Helper**: Added client-side helper that splits + trims + drops blanks on every read.
+* **Yard Location Picker**: Replaced the hardcoded `['Yard','Charging point','Pickup point']` buttons in `openYardLocation()` with admin-configurable locations from Settings. If no locations are configured, the modal shows a message directing to Settings.
+* **Settings UI**: Added a "Locations" card in Settings (below Charging points) with add/remove functionality, matching the charging points pattern exactly.
+* **Removed Maintenance Toggle from Yard**: The yard vehicle cards no longer show the maintenance toggle — that's a fleet management concern, not a yard concern. Yard cards now show only: Set Location and Charge/Charged toggle.
+
+## 13. Yard Handover Flow (AdminJS.html)
+* **Location Prompt on Handover**: The "Scooter handed over" button now opens a location picker modal (using admin-configurable locations) before marking the booking as handed over. The yard staff picks where the scooter is, then it's marked done.
+* **Skip Location**: A "Skip location" button allows the yard to mark as handed over without setting a location (for cases where the location is unknown or irrelevant).
+* **Dual Write**: On handover, both `markYardDone` and `setVehicleLocation` are called in sequence, so the vehicle's location is updated atomically with the handover timestamp.

@@ -137,7 +137,14 @@ function processReturn(bookingId, returnData, token) {
   }
 
   let refundCash = 0, refundUPI = 0;
-  if (refundMode === 'cash') {
+  if (refundMode === 'split') {
+    // Operator explicitly chose how to split the refund
+    refundCash = Number(returnData.refundCash) || 0;
+    refundUPI  = Number(returnData.refundUPI)  || 0;
+    if (refundCash + refundUPI !== refundAmount) {
+      throw new Error('Split refund (' + refundCash + ' + ' + refundUPI + ') does not equal refund amount (' + refundAmount + ').');
+    }
+  } else if (refundMode === 'cash') {
     refundCash = refundAmount;
   } else {
     refundUPI = refundAmount;
@@ -196,11 +203,13 @@ function processReturn(bookingId, returnData, token) {
     ? 'FLAG:backdated claimed ' + Utilities.formatDate(actualReturn, 'Asia/Kolkata', 'dd MMM HH:mm') +
       ' recorded ' + Utilities.formatDate(recordedAt, 'Asia/Kolkata', 'dd MMM HH:mm')
     : '';
+  const returnNote = opName ? 'Return processed by ' + opName : '';
+  const refundNote = backdatedNote ? (returnNote ? returnNote + ' · ' + backdatedNote : backdatedNote) : returnNote;
   _appendLedgerRows([
     { type: 'LateFeeIn',     direction: 'credit', amount: postedLateFee,   account: 'income', operator: opName, bookingId: bookingId },
     { type: 'DeductionIn',   direction: 'credit', amount: postedDeduction, account: 'income', operator: opName, bookingId: bookingId },
-    { type: 'Refund',        direction: 'debit',  amount: refundCash,     account: 'cash',   operator: opName, bookingId: bookingId, note: backdatedNote },
-    { type: 'DepositRefund', direction: 'debit',  amount: refundUPI,      account: 'upi',    operator: opName, bookingId: bookingId, note: backdatedNote }
+    { type: 'Refund',        direction: 'debit',  amount: refundCash,     account: 'cash',   operator: opName, bookingId: bookingId, note: refundNote },
+    { type: 'DepositRefund', direction: 'debit',  amount: refundUPI,      account: 'upi',    operator: opName, bookingId: bookingId, note: refundNote }
   ]);
 
   _bumpDataVersion();
