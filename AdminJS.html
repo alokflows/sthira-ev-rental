@@ -1178,7 +1178,7 @@
   }
   // SVG donut — works in GAS sandbox (conic-gradient with var() is broken in Caja)
   function _svgDonut(pieces, size, ringW, centerVal, centerLbl){
-    var r=15.9155, circ=100; // r = 50/(2*PI) → circumference = exactly 100
+    var r=15.9155, circ=100;
     var offset=0;
     var circles=pieces.map(function(p){
       var dash=p.pct+' '+(100-p.pct);
@@ -1187,11 +1187,10 @@
       return svg;
     }).join('');
     var legend=pieces.map(function(p){ return '<div class="rpt-legend-item"><span class="dot" style="background:'+p.color+';"></span>'+esc(p.lbl)+' · <b>'+p.pct+'%</b></div>'; }).join('');
-    return '<div class="rpt-donut-wrap"><div class="rpt-donut" style="width:'+size+'px;height:'+size+'px;background:var(--surface-2);border-radius:50%;position:relative;flex:none;">'
-      +'<svg viewBox="0 0 36 36" style="width:100%;height:100%;transform:rotate(0deg);">'+circles+'</svg>'
-      +'<div class="donut-center" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1;">'
-      +'<div class="dc-val" style="font-family:var(--serif);font-size:'+(size>100?'22px':'18px')+';font-weight:500;color:var(--ink);">'+centerVal+'</div>'
-      +'<div class="dc-lbl" style="font-size:10.5px;color:var(--muted-2);margin-top:2px;">'+centerLbl+'</div></div></div>'
+    var sm=size<=100?' sm':'';
+    return '<div class="rpt-donut-wrap"><div class="rpt-donut'+sm+'" style="width:'+size+'px;height:'+size+'px;">'
+      +'<svg viewBox="0 0 36 36" style="width:100%;height:100%;">'+circles+'</svg>'
+      +'<div class="donut-center"><div class="dc-val">'+centerVal+'</div><div class="dc-lbl">'+centerLbl+'</div></div></div>'
       +'<div class="rpt-legend">'+legend+'</div></div>';
   }
   // Compact mini-donut for Quick Glance strip (SVG)
@@ -1204,10 +1203,9 @@
       return svg;
     }).join('');
     var legend=pieces.map(function(p){ return '<b>'+p.pct+'%</b> '+esc(p.lbl); }).join(' · ');
-    return '<div class="rpt-glance-item"><div class="rg-donut" style="width:90px;height:90px;background:var(--surface-2);border-radius:50%;position:relative;flex:none;margin-bottom:10px;">'
+    return '<div class="rpt-glance-item"><div class="rg-donut">'
       +'<svg viewBox="0 0 36 36" style="width:100%;height:100%;">'+circles+'</svg>'
-      +'<div class="rg-center" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1;">'
-      +'<div class="rg-val" style="font-family:var(--serif);font-size:18px;font-weight:500;color:var(--ink);line-height:1;">'+pieces[0].pct+'%</div></div></div>'
+      +'<div class="rg-center"><div class="rg-val">'+pieces[0].pct+'%</div></div></div>'
       +'<div class="rg-title">'+esc(title)+'</div><div class="rg-legend">'+legend+'</div></div>';
   }
   function _hbar(items, maxVal){
@@ -1261,7 +1259,7 @@
 
     // Header
     var hdr='<div class="rpt-header"><div><h2>Analytics Report</h2>'
-      +'<div style="font-size:13px;color:var(--muted-2);margin-top:2px;">'+_fmtShort(rng.from)+' – '+_fmtShort(rng.to)+' · '+rng.spanDays+' days</div></div>'
+      +'<div class="rpt-subtitle">'+_fmtShort(rng.from)+' – '+_fmtShort(rng.to)+' · '+rng.spanDays+' days</div></div>'
       +'<div class="rpt-range">'+ptoggle+'</div></div>'+customRow;
 
     // Insight box
@@ -1333,7 +1331,7 @@
     // Operator performance
     var opItems=Object.keys(c.operators).map(function(k){return c.operators[k];}).sort(function(a,b){return b.revenue-a.revenue;});
     var opTable=opItems.length?'<div class="rpt-section"><h3>Operator Performance</h3><p class="rpt-sub">Bookings handled this period</p>'
-      +'<div style="overflow-x:auto;"><table class="rpt-optable"><thead><tr><th>Operator</th><th>Bookings</th><th>Revenue</th><th>Avg / booking</th></tr></thead><tbody>'
+      +'<div class="rpt-table-wrap"><table class="rpt-optable"><thead><tr><th>Operator</th><th>Bookings</th><th>Revenue</th><th>Avg / booking</th></tr></thead><tbody>'
       +opItems.map(function(o){ return '<tr><td>'+esc(o.name)+(o.name===A.operator?' <span style="color:var(--pine);font-weight:600;">· you</span>':'')+'</td>'
         +'<td>'+o.bookings+'</td><td>'+inr(o.revenue)+'</td><td>'+inr(o.bookings?Math.round(o.revenue/o.bookings):0)+'</td></tr>'; }).join('')
       +'</tbody></table></div></div>':'';
