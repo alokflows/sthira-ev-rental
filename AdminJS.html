@@ -975,11 +975,19 @@
           '<label class="field-label">Public guest form link</label><div style="display:flex;gap:8px;flex-wrap:wrap;"><input class="field" id="guest-link" readonly value="'+esc(guestUrl)+'" style="flex:1;min-width:180px;"><button class="btn" data-action="copy-link" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Copy</button><button class="btn" data-action="open-link" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Open</button></div>'
         +(isMgr()?'<button class="btn" data-action="open-sheet" style="margin-top:14px;border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Open data spreadsheet ↗</button>':''));
 
+    // Yard staff use the SAME desk link — there is no separate yard form. Their role
+    // (Yard) does the routing: sign in with their PIN → land straight on the Yard page.
+    var deskUrl=(C.webAppUrl||window.WEB_APP_URL||'');
+    var gYardAccess=card('Yard staff access','On-ground staff use the same desk link — no separate form. Their PIN does the routing.',
+          '<div style="font-size:13.5px;color:var(--txt-2);line-height:1.6;margin-bottom:14px;">Add the person above with role <b>Yard</b> and their own 6-digit PIN. When they sign in on their phone they land straight on the <b>Yard</b> page (bring-out queue, fleet, charging) — Money and Reports stay hidden.</div>'
+        +'<label class="field-label">Desk link for yard phones</label><div style="display:flex;gap:8px;flex-wrap:wrap;"><input class="field" id="yard-link" readonly value="'+esc(deskUrl)+'" style="flex:1;min-width:180px;"><button class="btn" data-action="copy-yard-link" style="border:1px solid var(--line-3);background:var(--surface);color:var(--txt-2);font-weight:600;padding:12px 16px;border-radius:12px;">Copy</button></div>'
+        +'<div style="font-size:12.5px;color:var(--muted-2);margin-top:12px;line-height:1.6;">On the phone: open the link in Chrome → menu → <b>Add to Home screen</b>, sign in once, then tap <b>Enable alerts</b> on the Yard page so new allocations beep and buzz.</div>');
+
     // Guest-form group = everything riders touch (managers edit; operators just get the link).
     var gGuestForm=(isMgr()?gPricing+gCottages+gEmail:'')+gLink;
-    // Operators group (manager-only): operators list full-width, then access + powers
-    // side by side, then the Supervisor-powers grant card full-width beneath.
-    var gOperators=gOperatorsList+'<div class="set-pair">'+gAccess+gPowers+'</div>'+gSupPowers;
+    // Operators group (manager-only): operators list full-width, then the yard-access
+    // link card, then access + powers side by side, then the Supervisor-powers grant.
+    var gOperators=gOperatorsList+gYardAccess+'<div class="set-pair">'+gAccess+gPowers+'</div>'+gSupPowers;
 
     var groups={ guestform:gGuestForm, operators:gOperators };
     $('view-settings').innerHTML='<div class="'+animCls()+'">'
@@ -1750,7 +1758,7 @@
   function settingsAddCottage(){ var nm=val('cot-newname'); if(!nm) return; C.cottages=(C.cottages||[]).concat([{ cottageId:'tmp', name:nm, active:true }]); renderSettings(); flash('Saving…'); return call('addCottage',[nm, A.token]).then(function(){ flash(nm+' added.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
   function settingsRemoveCottage(id){ C.cottages=(C.cottages||[]).filter(function(c){ return c.cottageId!==id; }); renderSettings(); flash('Removing…'); return call('deactivateCottage',[id, A.token]).then(function(){ flash('Cottage removed.'); silentRefresh({settings:true}); }).catch(function(e){ flash(errMsg(e), true); silentRefresh({settings:true}); }); }
 
-  function copyLink(){ var el=$('guest-link'); if(!el) return; el.select(); try{ document.execCommand('copy'); flash('Link copied.'); }catch(e){ flash('Select and copy the link.'); } }
+  function copyLink(id){ var el=$(id||'guest-link'); if(!el) return; el.select(); try{ document.execCommand('copy'); flash('Link copied.'); }catch(e){ flash('Select and copy the link.'); } }
   function openSheet(){ flash('Opening spreadsheet…'); call('getSpreadsheetUrl',[A.token]).then(function(u){ if(u) window.open(u,'_blank'); else flash('Spreadsheet URL unavailable.', true); }).catch(function(e){ flash(errMsg(e), true); }); }
   function doLogout(){ A.authGen++; var tk=A.token; A.token=null; C=null; A.yardSeen={}; A._yardSeeded=false; clearInterval(refreshTimer); clearSession(); call('adminLogout',[tk]).catch(function(){}); flash('Locked.'); showLogin(); }
 
@@ -1845,6 +1853,7 @@
       case 'cot-add': settingsAddCottage(); break;
       case 'cot-remove': settingsRemoveCottage(id); break;
       case 'copy-link': copyLink(); break;
+      case 'copy-yard-link': copyLink('yard-link'); break;
       case 'open-link': window.open((C&&C.webAppUrl||window.WEB_APP_URL||'')+(((C&&C.webAppUrl||window.WEB_APP_URL||'').indexOf('?')>=0)?'&':'?')+'mode=rider','_blank'); break;
       case 'open-sheet': openSheet(); break;
       case 'logout': doLogout(); break;
